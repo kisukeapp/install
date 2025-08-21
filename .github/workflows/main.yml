@@ -58,7 +58,7 @@ jobs:
         id: create_release
         uses: softprops/action-gh-release@v1
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.KISUKE_GH_TOKEN }}
         with:
           tag_name: "${{ github.ref_name }}"
           name: "Release ${{ github.ref_name }}"
@@ -69,7 +69,7 @@ jobs:
       - name: Upload tar.xz files to release
         uses: softprops/action-gh-release@v1
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.KISUKE_GH_TOKEN }}
         with:
           tag_name: "${{ github.ref_name }}"
           files: ${{ steps.gather.outputs.files }}
@@ -86,7 +86,7 @@ jobs:
       - name: Upload Python scripts bundle to release
         uses: softprops/action-gh-release@v1
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.KISUKE_GH_TOKEN }}
         with:
           tag_name: "${{ github.ref_name }}"
           name: "Release ${{ github.ref_name }}"
