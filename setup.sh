@@ -8,7 +8,7 @@ declare -A PKG_MANAGERS=([apk]="apk add" [apt]="apt-get install -y"
                         [dnf]="dnf install -y" [yum]="yum install -y" [pacman]="pacman -S --noconfirm"
                         [zypper]="zypper install -y" [portage]="emerge --ask=n" [xbps]="xbps-install -S" [brew]="brew install")
 
-REPO="kisukeapp/host-scripts"
+REPO="kisukeapp/install"
 KISUKE_VERSION="INJECT_VERSION_HERE"
 BIN_DIR="$HOME/.kisuke/bin"
 NODEJS_BIN_DIR="$BIN_DIR/nodejs/bin"
