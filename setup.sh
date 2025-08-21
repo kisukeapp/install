@@ -393,13 +393,18 @@ validate_github_setup() {
         fi
     fi
     GITHUB_API="https://api.github.com/repos/$REPO"
-    TMP_DIR=$(mktemp -d)
-    trap 'rm -rf "$TMP_DIR"' EXIT
-    cd "$TMP_DIR" || return 1
     CURL_HEADERS=(-H "Accept: application/vnd.github+json")
-    log NOTIFY "Using public GitHub API"
     
-    if ! curl -sSL "${CURL_HEADERS[@]}" "${GITHUB_API}/releases/latest" -o releases-latest.json; then
+    # Use specific version if injected, otherwise latest
+    if [[ "$KISUKE_VERSION" != "INJECT_VERSION_HERE" ]]; then
+        RELEASE_ENDPOINT="${GITHUB_API}/releases/tags/${KISUKE_VERSION}"
+        log NOTIFY "Fetching release metadata for v${KISUKE_VERSION}"
+    else
+        RELEASE_ENDPOINT="${GITHUB_API}/releases/latest"
+        log NOTIFY "Fetching latest release metadata (dev mode)"
+    fi
+    
+    if ! curl -sSL "${CURL_HEADERS[@]}" "$RELEASE_ENDPOINT" -o "$CACHE_DIR/releases-latest.json"; then
         log ERROR "Failed to fetch GitHub releases"
         return 1
     fi
@@ -408,7 +413,7 @@ validate_github_setup() {
 download_and_extract() {
     local pkg="$1" filename="$2"
     local download_url
-    download_url=$("$BIN_DIR/jq" -r ".assets[] | select(.name==\"$filename\") | .browser_download_url" releases-latest.json)
+    download_url=$("$BIN_DIR/jq" -r ".assets[] | select(.name==\"$filename\") | .browser_download_url" "$CACHE_DIR/releases-latest.json")
     
     if [[ -z "$download_url" || "$download_url" == "null" ]]; then
         log ERROR "Could not find download URL for $filename"
@@ -833,13 +838,20 @@ deploy_scripts() {
     temp_dir=$(mktemp -d)
     trap "rm -rf '$temp_dir'" EXIT
 
-    log NOTIFY "Fetching latest release information..."
     local releases_json="$temp_dir/releases-latest.json"
     local curl_headers=(-H "Accept: application/vnd.github+json")
+    local github_api="${GITHUB_API:-https://api.github.com/repos/$REPO}"
     
-    if ! curl -sSL "${curl_headers[@]}" \
-              "${GITHUB_API:-https://api.github.com/repos/$REPO}/releases/latest" \
-              -o "$releases_json"; then
+    # Use specific version if injected, otherwise latest
+    if [[ "$KISUKE_VERSION" != "INJECT_VERSION_HERE" ]]; then
+        RELEASE_ENDPOINT="${github_api}/releases/tags/${KISUKE_VERSION}"
+        log NOTIFY "Fetching release information for v${KISUKE_VERSION}..."
+    else
+        RELEASE_ENDPOINT="${github_api}/releases/latest"
+        log NOTIFY "Fetching latest release information (dev mode)..."
+    fi
+    
+    if ! curl -sSL "${curl_headers[@]}" "$RELEASE_ENDPOINT" -o "$releases_json"; then
         log ERROR "Failed to fetch GitHub releases"
         return 1
     fi
