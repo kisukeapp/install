@@ -59,17 +59,21 @@ jobs:
           
           find $HOME -maxdepth 1 -name "kisuke-*.tar.xz" -ls
           
-          # Copy all kisuke-*.tar.xz files from $HOME to current directory
           cp $HOME/kisuke-*.tar.xz . 2>/dev/null || echo "No kisuke-*.tar.xz files found in $HOME"
           
-          echo "=== Files in current directory ==="
           ls -la .
           
-          # Verify setup.sh exists
           if [ -f "setup.sh" ]; then
             echo "setup.sh found"
           else
             echo "ERROR: setup.sh not found!"
+            exit 1
+          fi
+          if [ -f "VERSION" ]; then
+            echo "VERSION file found, contents:"
+            cat VERSION
+          else
+            echo "ERROR: VERSION file not found!"
             exit 1
           fi
         shell: bash
@@ -85,7 +89,7 @@ jobs:
 
       - name: List final files for upload
         run: |
-          ls -la *.tar.xz setup.sh
+          ls -la *.tar.xz setup.sh VERSION
         shell: bash
 
       - name: Create release and upload files
@@ -100,4 +104,5 @@ jobs:
           generate_release_notes: true
           files: |
             setup.sh
+            VERSION
             kisuke-*.tar.xz
