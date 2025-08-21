@@ -83,10 +83,12 @@ detect_platform() {
             exit 1
             ;;
     esac
-    
     # Report system info for mobile app
     [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] OK SYSTEM_INFO OS=$OS ARCH=$ARCH"
     [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] OK PLATFORM_COMPAT true"
+
+    # TODO: look into this later
+    echo ""
 }
 
 
