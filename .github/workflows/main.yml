@@ -52,22 +52,40 @@ jobs:
         shell: bash
         run: bash package.sh
       
-      - name: Gather generated tar.xz files
-        id: gather
+      - name: List and prepare files for upload
+        id: prepare_files
         run: |
-          # Find all tar.xz files in $HOME
-          files=$(find $HOME -maxdepth 1 -name "*.tar.xz" -print0 | xargs -0)
-          # Add setup.sh to the list of files
-          files="$files setup.sh"
-          echo "files=$files" >> $GITHUB_OUTPUT
-      
+          ls -la $HOME/
+          
+          find $HOME -maxdepth 1 -name "kisuke-*.tar.xz" -ls
+          
+          # Copy all kisuke-*.tar.xz files from $HOME to current directory
+          cp $HOME/kisuke-*.tar.xz . 2>/dev/null || echo "No kisuke-*.tar.xz files found in $HOME"
+          
+          echo "=== Files in current directory ==="
+          ls -la .
+          
+          # Verify setup.sh exists
+          if [ -f "setup.sh" ]; then
+            echo "setup.sh found"
+          else
+            echo "ERROR: setup.sh not found!"
+            exit 1
+          fi
+        shell: bash
+
       - name: Bundle Python scripts
         run: |
-          scripts_bundle="kisuke-scripts-${GITHUB_REF_NAME}.tar.xz"
+          scripts_bundle="kisuke-bridge-${GITHUB_REF_NAME}.tar.xz"
           echo "Creating bundle: $scripts_bundle"
           tar -cJf "$scripts_bundle" scripts/
-          echo "scripts_bundle=$scripts_bundle" >> $GITHUB_OUTPUT
-        id: bundle_scripts
+          echo "Created scripts bundle: $scripts_bundle"
+          ls -la "$scripts_bundle"
+        shell: bash
+
+      - name: List final files for upload
+        run: |
+          ls -la *.tar.xz setup.sh
         shell: bash
 
       - name: Create release and upload files
@@ -81,5 +99,5 @@ jobs:
           prerelease: false
           generate_release_notes: true
           files: |
-            ${{ steps.gather.outputs.files }}
-            ${{ steps.bundle_scripts.outputs.scripts_bundle }}
+            setup.sh
+            kisuke-*.tar.xz
