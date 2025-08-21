@@ -28,9 +28,10 @@ log() {
     local level="$1" msg="$2"
     if [[ $MOBILE_APP -eq 1 ]]; then
         case "$level" in
-            ERROR) echo "[KECHO] ALERT $msg" ;;
+            ERROR) echo "[KECHO] ERROR $msg" ;;
             NOTIFY) echo "[KECHO] NOTIFY $msg" ;;
             OK) echo "[KECHO] OK $msg" ;;
+            ALERT) echo "[KECHO] ALERT $msg" ;;
             *) echo "$msg" ;;
         esac
     else
@@ -38,6 +39,7 @@ log() {
             ERROR) echo -e "${COLORS[RED]}[ERROR]${COLORS[RESET]} $msg" >&2 ;;
             NOTIFY) echo -e "${COLORS[CYAN]}[INFO]${COLORS[RESET]}  $msg" ;;
             OK) echo -e "${COLORS[GREEN]}[OK]${COLORS[RESET]}    $msg" ;;
+            ALERT) echo -e "${COLORS[RED]}[ALERT]${COLORS[RESET]} $msg" >&2 ;;
             *) echo "$msg" ;;
         esac
     fi
@@ -58,24 +60,33 @@ parse_args() {
 }
 
 detect_platform() {
-    case "$(uname -s)" in
+    local raw_os="$(uname -s)"
+    local raw_arch="$(uname -m)"
+    
+    case "$raw_os" in
         Linux*) OS="linux" ;;
         Darwin*) OS="mac" ;;
         *) 
-            log ERROR "Unsupported OS: $(uname -s)"
-            [[ "$MOBILE_APP" == "1" ]] && log ERROR "PLATFORM_COMPAT false"
+            log ERROR "Unsupported OS: $raw_os"
+            [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] OK SYSTEM_INFO OS=$raw_os ARCH=$raw_arch"
+            [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] OK PLATFORM_COMPAT false"
             exit 1
             ;;
     esac   
-    case "$(uname -m)" in
+    case "$raw_arch" in
         arm64|aarch64) ARCH="arm64" ;;
         x86_64|amd64) ARCH="x86_64" ;;
         *) 
-            log ERROR "Unsupported architecture: $(uname -m)"
-            [[ "$MOBILE_APP" == "1" ]] && log ERROR "PLATFORM_COMPAT false"
+            log ERROR "Unsupported architecture: $raw_arch"
+            [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] OK SYSTEM_INFO OS=$OS ARCH=$raw_arch"
+            [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] OK PLATFORM_COMPAT false"
             exit 1
             ;;
     esac
+    
+    # Report system info for mobile app
+    [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] OK SYSTEM_INFO OS=$OS ARCH=$ARCH"
+    [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] OK PLATFORM_COMPAT true"
 }
 
 
@@ -609,67 +620,174 @@ EOF
 
 handle_install() {
     local packages=("${@}")
+    local failed_packages=()
+    local has_critical_failure=0
+    local processed_packages=()  # Track what we've already processed to avoid redundancy
     [[ ${#packages[@]} -eq 0 ]] && packages=(git tmux jq ripgrep nodejs python3 claude)
     for pkg in "${packages[@]}"; do
         [[ "$pkg" =~ ^(nodejs|python3|claude)$ ]] && { validate_github_setup; break; }
     done
     for pkg in "${packages[@]}"; do
+        # Add to processed list to avoid redundant processing
+        processed_packages+=("$pkg")
+        
         case "$pkg" in
             git|tmux)
                 if install_system_package "$pkg"; then
                     log OK "$pkg installed"
+                    [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] OK LOCAL_BIN $pkg installed"
                 else
                     log ERROR "Failed to install $pkg"
-                    continue
+                    [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR Failed to install $pkg - this is a critical failure"
+                    failed_packages+=("$pkg")
+                    has_critical_failure=1
                 fi
                 ;;
             jq)
                 if install_jq; then
-                    verify_installation jq
+                    if verify_installation jq; then
+                        [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] OK LOCAL_BIN jq installed"
+                    else
+                        log ERROR "jq verification failed"
+                        [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR jq installed but verification failed"
+                        failed_packages+=("jq")
+                        has_critical_failure=1
+                    fi
                 else
                     log ERROR "Failed to install jq"
-                    continue
+                    [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR Failed to install jq - this is a critical failure"
+                    failed_packages+=("jq")
+                    has_critical_failure=1
                 fi
                 ;;
             ripgrep)
                 if install_ripgrep; then
-                    verify_installation ripgrep
+                    if verify_installation ripgrep; then
+                        [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] OK LOCAL_BIN ripgrep installed"
+                    else
+                        log ERROR "ripgrep verification failed"
+                        [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR ripgrep installed but verification failed"
+                        failed_packages+=("ripgrep")
+                        has_critical_failure=1
+                    fi
                 else
                     log ERROR "Failed to install ripgrep"
-                    continue
+                    [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR Failed to install ripgrep - this is a critical failure"
+                    failed_packages+=("ripgrep")
+                    has_critical_failure=1
                 fi
                 ;;
             nodejs|python3)
                 if install_binary_package "$pkg"; then
-                    verify_installation "$pkg"
+                    if verify_installation "$pkg"; then
+                        [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] OK LOCAL_BIN $pkg installed"
+                    else
+                        log ERROR "$pkg verification failed"
+                        [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR $pkg installed but verification failed"
+                        failed_packages+=("$pkg")
+                        has_critical_failure=1
+                    fi
                 else
                     log ERROR "Failed to install $pkg"
-                    continue
+                    [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR Failed to install $pkg - this is a critical failure"
+                    failed_packages+=("$pkg")
+                    has_critical_failure=1
                 fi
                 ;;
             claude)
                 local nodejs_ver
+                local deps_ok=1
+                
+                # Check nodejs dependency
                 nodejs_ver=$(get_version nodejs local)
                 if [[ "$nodejs_ver" == "unknown" ]]; then
-                    log NOTIFY "Claude requires Node.js. Installing..."
-                    if install_binary_package nodejs; then
-                        verify_installation nodejs
+                    # Check if nodejs was already processed (either succeeded or failed)
+                    if [[ " ${processed_packages[@]} " =~ " nodejs " ]]; then
+                        # Already processed - check if it failed
+                        if [[ " ${failed_packages[@]} " =~ " nodejs " ]]; then
+                            log ERROR "Claude requires nodejs which failed to install earlier"
+                            [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR Claude cannot be installed - nodejs dependency failed"
+                            failed_packages+=("claude")
+                            has_critical_failure=1
+                            continue
+                        fi
                     else
-                        log ERROR "Failed to install nodejs dependency for Claude"
-                        continue
-                    fi
-                    if install_ripgrep; then
-                        verify_installation ripgrep
-                    else
-                        log ERROR "Failed to install ripgrep dependency for Claude"
-                        continue
+                        # Not processed yet - install it now (solo claude install case)
+                        log NOTIFY "Claude requires Node.js. Installing..."
+                        if install_binary_package nodejs; then
+                            if verify_installation nodejs; then
+                                [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] OK LOCAL_BIN nodejs installed"
+                            else
+                                log ERROR "nodejs verification failed"
+                                [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR nodejs installed but verification failed"
+                                failed_packages+=("nodejs")
+                                deps_ok=0
+                            fi
+                        else
+                            log ERROR "Failed to install nodejs dependency for Claude"
+                            [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR Failed to install nodejs - required for Claude"
+                            failed_packages+=("nodejs")
+                            deps_ok=0
+                        fi
                     fi
                 fi
+                
+                # Check ripgrep dependency
+                if ! command -v rg &>/dev/null; then
+                    # Check if ripgrep was already processed
+                    if [[ " ${processed_packages[@]} " =~ " ripgrep " ]]; then
+                        # Already processed - check if it failed
+                        if [[ " ${failed_packages[@]} " =~ " ripgrep " ]]; then
+                            log ERROR "Claude requires ripgrep which failed to install earlier"
+                            [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR Claude cannot be installed - ripgrep dependency failed"
+                            failed_packages+=("claude")
+                            has_critical_failure=1
+                            continue
+                        fi
+                    else
+                        # Not processed yet - install it now (solo claude install case)
+                        log NOTIFY "Claude requires ripgrep. Installing..."
+                        if install_ripgrep; then
+                            if verify_installation ripgrep; then
+                                [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] OK LOCAL_BIN ripgrep installed"
+                            else
+                                log ERROR "ripgrep verification failed"
+                                [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR ripgrep installed but verification failed"
+                                failed_packages+=("ripgrep")
+                                deps_ok=0
+                            fi
+                        else
+                            log ERROR "Failed to install ripgrep dependency for Claude"
+                            [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR Failed to install ripgrep - required for Claude"
+                            failed_packages+=("ripgrep")
+                            deps_ok=0
+                        fi
+                    fi
+                fi
+                
+                # Only try installing Claude if dependencies are satisfied
+                if [[ $deps_ok -eq 0 ]]; then
+                    log ERROR "Claude installation skipped due to missing dependencies"
+                    [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR Claude cannot be installed - dependencies failed"
+                    failed_packages+=("claude")
+                    has_critical_failure=1
+                    continue
+                fi
+                # Try installing Claude (dependencies already checked above)
                 if install_claude_tools; then
-                    verify_installation claude
+                    if verify_installation claude; then
+                        [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] OK LOCAL_BIN claude installed"
+                    else
+                        log ERROR "claude verification failed"
+                        [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR claude installed but verification failed"
+                        failed_packages+=("claude")
+                        has_critical_failure=1
+                    fi
                 else
                     log ERROR "Failed to install Claude tools"
-                    continue
+                    [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR Failed to install Claude tools - this is a critical failure"
+                    failed_packages+=("claude")
+                    has_critical_failure=1
                 fi
                 ;;
             *)
@@ -678,13 +796,27 @@ handle_install() {
         esac
     done
     
+    # Check if any critical failures occurred
+    if [[ $has_critical_failure -eq 1 ]]; then
+        log ERROR "Installation failed for critical packages: ${failed_packages[*]}"
+        [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR Installation failed - critical packages missing: ${failed_packages[*]}"
+        return 1
+    fi
+    
     log OK "Installation complete!"
+    [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] OK Installation complete - all packages installed successfully"
+    
     log NOTIFY "Automatically deploying scripts..."
     if deploy_scripts; then
         log OK "Scripts deployed successfully!"
+        [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] OK Scripts deployed successfully"
     else
         log ERROR "Script deployment failed, but you can run with --deploy later"
+        [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR Script deployment failed"
+        return 1
     fi
+    
+    return 0
 }
 
 deploy_scripts() {
@@ -812,6 +944,7 @@ write_version_file() {
     local version_file="$HOME/.kisuke/VERSION"
     echo "$KISUKE_VERSION" > "$version_file"
     log OK "Version $KISUKE_VERSION written to $version_file"
+    [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] OK VERSION $KISUKE_VERSION"
 }
 
 handle_uninstall() {
@@ -889,18 +1022,37 @@ main() {
             handle_uninstall
         fi
     elif [[ $INSTALL -eq 1 ]]; then
+        local install_result=0
         if [[ ${#INSTALL_PACKAGES[@]} -gt 0 ]]; then
-            handle_install "${INSTALL_PACKAGES[@]}"
+            if ! handle_install "${INSTALL_PACKAGES[@]}"; then
+                install_result=1
+            fi
         else
-            handle_install
+            if ! handle_install; then
+                install_result=1
+            fi
         fi
-        # handle_install now calls deploy_scripts internally
-        copy_setup_script
-        write_version_file
+        
+        if [[ $install_result -eq 0 ]]; then
+            # Only copy script and write version file if installation succeeded
+            copy_setup_script
+            write_version_file
+            [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] OK Installation complete"
+        else
+            log ERROR "Installation failed - VERSION file not created"
+            [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR Installation failed - setup incomplete"
+            exit 1
+        fi
     elif [[ $DEPLOY -eq 1 ]]; then
-        deploy_scripts
-        copy_setup_script
-        write_version_file
+        if deploy_scripts; then
+            copy_setup_script
+            write_version_file
+            [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] OK Deployment complete"
+        else
+            log ERROR "Deployment failed - VERSION file not created"
+            [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR Deployment failed"
+            exit 1
+        fi
     else
         show_status
     fi
