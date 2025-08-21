@@ -1,0 +1,35 @@
+Kisuke Installation Scripts License
+Copyright (c) 2025 STORMBORNE, INC. All rights reserved.
+
+These scripts are part of Kisuke, an iOS application by STORMBORNE, INC.
+
+WHAT YOU CAN DO:
+✓ Use these scripts as part of the Kisuke iOS application
+✓ Run these scripts on your personal devices (Mac, PC, servers) to enable Kisuke functionality
+✓ View the source code for transparency and debugging
+✓ Report bugs and suggest improvements
+
+WHAT YOU CANNOT DO:
+✗ Use these scripts outside of Kisuke or for any other purpose
+✗ Create competing products or services using this code
+✗ Sell, sublicense, or commercially distribute these scripts
+✗ Remove or alter any copyright notices
+
+THIRD-PARTY SOFTWARE:
+These scripts may download and use third-party software (Python, Node.js, tmux, etc.)
+which have their own licenses. We don't claim ownership of those - only our scripts
+that orchestrate their installation and configuration for Kisuke.
+
+NO WARRANTY:
+This software is provided "as is" without any warranties. Use at your own risk.
+STORMBORNE, INC is not liable for any damages arising from use of this software.
+
+QUESTIONS?
+If you want to use this code for something else or have licensing questions,
+reach out to me at: kyon@stormborne.inc
+
+This license is governed by the laws of Delaware, United States.
+
+---
+TL;DR: These scripts exist to make Kisuke work on your devices. Use them for that,
+don't use them for anything else, and we're all good. 🤝

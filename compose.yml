@@ -1,0 +1,18 @@
+services:
+  dev-env:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      platforms:
+        - linux/amd64
+        - linux/arm64
+    image: ghcr.io/kisuke-app/host-scripts/kisuke-remote:latest
+
+    container_name: kisuke-remote
+    ports:
+      - "2222:22"
+    environment:
+      USERNAME: ${USERNAME}
+      PASSWORD: ${PASSWORD}
+    volumes:
+      - ./project:/home/${USERNAME}/project

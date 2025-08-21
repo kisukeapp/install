@@ -1,0 +1,96 @@
+name: Build and Upload tar.xz Assets to Release
+
+on:
+  push:
+    tags:
+      - '*'
+  workflow_dispatch:
+  release:
+    types: [published]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release' || (github.event_name == 'push' && contains(fromJson('["OWNER", "COLLABORATOR", "MEMBER"]'), github.event.sender.type)) || github.event_name == 'workflow_dispatch'
+    strategy:
+      matrix:
+        arch: [x64, arm64]
+
+    container:
+      image: ubuntu:22.04
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Write VERSION file
+        run: echo "${GITHUB_REF_NAME}" > VERSION
+
+      - name: Inject version into setup.sh
+        run: |
+          sed -i "s/INJECT_VERSION_HERE/${GITHUB_REF_NAME}/g" setup.sh
+          echo "Injected version ${GITHUB_REF_NAME} into setup.sh"
+
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y apt-utils zip sudo bash
+      - name: Debug bash version
+        run: |
+          echo "Shell: $SHELL"
+          bash --version
+          which bash
+          ls -l $(which bash)
+        shell: bash
+      - name: Run package.sh
+        shell: bash
+        run: bash package.sh
+
+      - name: Gather generated tar.xz files
+        id: gather
+        run: |
+          # Find all tar.xz files in $HOME
+          files=$(find $HOME -maxdepth 1 -name "*.tar.xz" -print0 | xargs -0)
+          # Add setup.sh to the list of files
+          files="$files setup.sh"
+          echo "files=$files" >> $GITHUB_OUTPUT
+
+      - name: Create or get release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: "${{ github.ref_name }}"
+          name: "Release ${{ github.ref_name }}"
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+
+      - name: Upload tar.xz files to release
+        uses: softprops/action-gh-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: "${{ github.ref_name }}"
+          files: ${{ steps.gather.outputs.files }}
+
+      - name: Bundle Python scripts
+        run: |
+          scripts_bundle="kisuke-scripts-${GITHUB_REF_NAME}.tar.xz"
+          echo "Creating bundle: $scripts_bundle"
+          tar -cJf "$scripts_bundle" scripts/
+          echo "scripts_bundle=$scripts_bundle" >> $GITHUB_OUTPUT
+        id: bundle_scripts
+        shell: bash
+
+      - name: Upload Python scripts bundle to release
+        uses: softprops/action-gh-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: "${{ github.ref_name }}"
+          name: "Release ${{ github.ref_name }}"
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: ${{ steps.bundle_scripts.outputs.scripts_bundle }}
