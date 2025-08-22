@@ -36,7 +36,7 @@ jobs:
       
       - name: Inject version into setup.sh
         run: |
-          sed -i "s/INJECT_VERSION_HERE/${GITHUB_REF_NAME}/g" setup.sh
+          sed -i "s/^KISUKE_VERSION=\"INJECT_VERSION_HERE\"/KISUKE_VERSION=\"${GITHUB_REF_NAME}\"/" setup.sh
           echo "Injected version ${GITHUB_REF_NAME} into setup.sh"
       
       - name: Install dependencies
