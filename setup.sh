@@ -521,7 +521,7 @@ install_ripgrep() {
 
 validate_github_setup() {
     if [[ ! -x "$BIN_DIR/jq" ]]; then
-        log ERROR "jq not found - installing"
+        log ALERT "jq not found - installing"
         if install_jq; then
             verify_installation jq
         else
