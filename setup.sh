@@ -3,7 +3,16 @@ set -euo pipefail
 
 # pkg config
 declare -A COLORS=([RED]="\033[31m" [GREEN]="\033[32m" [CYAN]="\033[36m" [RESET]="\033[0m")
-declare -A VERSIONS=([nodejs]="22.9.0" [python3]="3.12.11" [claude_sdk]="0.0.19" [claude_cli]="1.0.71" [jq]="1.7.1" [ripgrep]="14.1.1")
+declare -A VERSIONS=(
+    [nodejs]="22.9.0" 
+    [python3]="3.12.11" 
+    [claude_sdk]="0.0.19" 
+    [claude_cli]="1.0.71" 
+    [jq]="1.7.1" 
+    [ripgrep]="14.1.1"
+    [websockets]="15.0.1"
+    [uvloop]="0.21.0"
+)
 declare -A PKG_MANAGERS=([apk]="apk add" [apt]="apt-get install -y" 
                         [dnf]="dnf install -y" [yum]="yum install -y" [pacman]="pacman -S --noconfirm"
                         [zypper]="zypper install -y" [portage]="emerge --ask=n" [xbps]="xbps-install -S" [brew]="brew install")
@@ -19,6 +28,7 @@ mkdir -p "$BIN_DIR" "$INSTALL_MARKER_DIR" "$CACHE_DIR" "$SCRIPTS_DIR"
 
 # Globals
 MOBILE_APP=0 INSTALL=0 UNINSTALL=0 DEPLOY=0
+DISTRO=""  # Will be set by detect_platform()
 INSTALL_PACKAGES=() UNINSTALL_PACKAGES=()
 
 [[ ":$PATH:" != *":$BIN_DIR:"* ]] && export PATH="$BIN_DIR:$PATH"
@@ -339,6 +349,11 @@ install_jq() {
 }
 
 install_ripgrep() {
+    # Ensure DISTRO is set for Alpine detection
+    if [[ -z "$DISTRO" && -f /etc/os-release ]]; then
+        DISTRO=$(grep -E '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"')
+    fi
+    
     local current_ver expected_ver="${VERSIONS[ripgrep]}"
     current_ver=$(get_version ripgrep local)
     
@@ -353,11 +368,19 @@ install_ripgrep() {
     local archive_name binary_name
     case "$OS-$ARCH" in
         linux-x86_64) 
-            archive_name="ripgrep-${expected_ver}-x86_64-unknown-linux-musl.tar.gz"
+            if [[ "$DISTRO" == "alpine" ]]; then
+                archive_name="ripgrep-${expected_ver}-x86_64-unknown-linux-musl.tar.gz"
+            else
+                archive_name="ripgrep-${expected_ver}-x86_64-unknown-linux-gnu.tar.gz"
+            fi
             binary_name="rg"
             ;;
         linux-arm64) 
-            archive_name="ripgrep-${expected_ver}-aarch64-unknown-linux-gnu.tar.gz"
+            if [[ "$DISTRO" == "alpine" ]]; then
+                archive_name="ripgrep-${expected_ver}-aarch64-unknown-linux-musl.tar.gz"
+            else
+                archive_name="ripgrep-${expected_ver}-aarch64-unknown-linux-gnu.tar.gz"
+            fi
             binary_name="rg"
             ;;
         mac-x86_64) 
@@ -469,14 +492,14 @@ install_binary_package() {
 install_claude_tools() {
     local sdk_status=0 cli_status=0
     if [[ -x "$BIN_DIR/python3/bin/pip" ]]; then
-        local sdk_ver="${VERSIONS[claude_sdk]}"
+        local SDK_VER="${VERSIONS[claude_sdk]}"
         local current_sdk
         current_sdk=$(get_version claude_sdk)
         
-        if [[ "$current_sdk" != "$sdk_ver" ]]; then
-            if "$BIN_DIR/python3/bin/pip" install --force-reinstall --disable-pip-version-check --no-input -q "websockets==15.0.1" " uvloop==0.21.0" "claude-code-sdk==$sdk_ver"; then
-                cache_set "claude_sdk" "$sdk_ver"
-                log OK "claude-code-sdk installed v$sdk_ver"
+        if [[ "$current_sdk" != "$SDK_VER" ]]; then
+            if "$BIN_DIR/python3/bin/pip" install --force-reinstall --disable-pip-version-check --no-input -q "websockets==${VERSIONS[websockets]}" "uvloop==${VERSIONS[uvloop]}" "claude-code-sdk==$SDK_VER"; then
+                cache_set "claude_sdk" "$SDK_VER"
+                log OK "claude-code-sdk installed v$SDK_VER"
             else
                 log ERROR "claude-code-sdk install failed"
                 sdk_status=1
@@ -489,15 +512,15 @@ install_claude_tools() {
         sdk_status=1
     fi
     if [[ -x "$NODEJS_BIN_DIR/npm" ]]; then
-        local cli_ver="${VERSIONS[claude_cli]}"
+        local CLI_VER="${VERSIONS[claude_cli]}"
         local current_cli
         current_cli=$(get_version claude_cli)
         
-        if [[ "$current_cli" != "$cli_ver" ]]; then
-            if "$NODEJS_BIN_DIR/npm" install -g "@anthropic-ai/claude-code@$cli_ver" >/dev/null 2>&1; then
-                cache_set "claude_cli" "$cli_ver"
+        if [[ "$current_cli" != "$CLI_VER" ]]; then
+            if "$NODEJS_BIN_DIR/npm" install -g "@anthropic-ai/claude-code@$CLI_VER" >/dev/null 2>&1; then
+                cache_set "claude_cli" "$CLI_VER"
                 create_symlinks claude
-                log OK "@anthropic-ai/claude-code installed v$cli_ver"
+                log OK "@anthropic-ai/claude-code installed v$CLI_VER"
             else
                 log ERROR "claude-cli install failed"
                 cli_status=1
@@ -558,18 +581,18 @@ show_status() {
         done
         
         [[ "$all_installed" == true ]] && log OK "LOCAL_BINARIES" || log ERROR "LOCAL_BINARIES"
-        local claude_sdk_ver claude_cli_ver
-        claude_sdk_ver=$(get_version claude_sdk)
-        claude_cli_ver=$(get_version claude_cli)
+        local CLAUDE_SDK_VER CLAUDE_CLI_VER
+        CLAUDE_SDK_VER=$(get_version claude_sdk)
+        CLAUDE_CLI_VER=$(get_version claude_cli)
         
-        if [[ "$claude_sdk_ver" != "unknown" && "$claude_cli_ver" != "unknown" ]]; then
+        if [[ "$CLAUDE_SDK_VER" != "unknown" && "$CLAUDE_CLI_VER" != "unknown" ]]; then
             log OK "CLAUDE_TOOLS"
-            log OK "CLAUDE_TOOL SDK v$claude_sdk_ver"
-            log OK "CLAUDE_TOOL CLI v$claude_cli_ver"
+            log OK "CLAUDE_TOOL SDK v$CLAUDE_SDK_VER"
+            log OK "CLAUDE_TOOL CLI v$CLAUDE_CLI_VER"
         else
             log ERROR "CLAUDE_TOOLS"
-            [[ "$claude_sdk_ver" == "unknown" ]] && log ERROR "CLAUDE_TOOL SDK not_installed" || log OK "CLAUDE_TOOL SDK v$claude_sdk_ver"
-            [[ "$claude_cli_ver" == "unknown" ]] && log ERROR "CLAUDE_TOOL CLI not_installed" || log OK "CLAUDE_TOOL CLI v$claude_cli_ver"
+            [[ "$CLAUDE_SDK_VER" == "unknown" ]] && log ERROR "CLAUDE_TOOL SDK not_installed" || log OK "CLAUDE_TOOL SDK v$CLAUDE_SDK_VER"
+            [[ "$CLAUDE_CLI_VER" == "unknown" ]] && log ERROR "CLAUDE_TOOL CLI not_installed" || log OK "CLAUDE_TOOL CLI v$CLAUDE_CLI_VER"
         fi
     else
         log OK "System Information:"
@@ -611,13 +634,13 @@ show_status() {
             fi
         done
         echo
-        local sdk_ver cli_ver
-        sdk_ver=$(get_version claude_sdk)
-        cli_ver=$(get_version claude_cli)
+        local SDK_VER CLI_VER
+        SDK_VER=$(get_version claude_sdk)
+        CLI_VER=$(get_version claude_cli)
         
-        [[ "$sdk_ver" != "unknown" && "$cli_ver" != "unknown" ]] && log OK "Claude Tools:" || log ERROR "Claude Tools:"
-        echo "  SDK: $(format_status claude_sdk "$sdk_ver" "${VERSIONS[claude_sdk]}")"
-        echo "  CLI: $(format_status claude_cli "$cli_ver" "${VERSIONS[claude_cli]}")"
+        [[ "$SDK_VER" != "unknown" && "$CLI_VER" != "unknown" ]] && log OK "Claude Tools:" || log ERROR "Claude Tools:"
+        echo "  SDK: $(format_status claude_sdk "$SDK_VER" "${VERSIONS[claude_sdk]}")"
+        echo "  CLI: $(format_status claude_cli "$CLI_VER" "${VERSIONS[claude_cli]}")"
         
         cat <<EOF
 
