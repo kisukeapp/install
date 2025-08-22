@@ -86,6 +86,12 @@ detect_platform() {
     # Report system info for mobile app
     [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] OK SYSTEM_INFO OS=$OS ARCH=$ARCH"
     [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] OK PLATFORM_COMPAT true"
+    
+    # Detect distro for Alpine/musl handling
+    DISTRO=""
+    if [[ -f /etc/os-release ]]; then
+        DISTRO=$(grep -E '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"')
+    fi
 
     # TODO: look into this later
     echo ""
@@ -450,10 +456,11 @@ install_binary_package() {
     
     log NOTIFY "Installing $pkg v$expected_ver..."
     
-    if [[ "$OS" == "alpine" ]]; then
-        filename="kisuke-$expected_ver-${OS}-musl-${ARCH}-$pkg.tar.xz"
+    # Use new filename format with KISUKE_VERSION and proper Alpine detection
+    if [[ "$DISTRO" == "alpine" ]]; then
+        filename="kisuke-${KISUKE_VERSION}-${pkg}-${expected_ver}-${OS}-musl-${ARCH}.tar.xz"
     else
-        filename="kisuke-$expected_ver-${OS}-${ARCH}-$pkg.tar.xz"
+        filename="kisuke-${KISUKE_VERSION}-${pkg}-${expected_ver}-${OS}-${ARCH}.tar.xz"
     fi
     
     download_and_extract "$pkg" "$filename"

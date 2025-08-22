@@ -54,6 +54,12 @@ if [[ -z "$DISTRO" ]]; then
   exit 1
 fi
 
+# Detect if we're on Alpine for musl naming
+IS_ALPINE=0
+if [[ "$DISTRO" == "alpine" ]]; then
+    IS_ALPINE=1
+fi
+
 echo "Detected distro: $DISTRO" | tee -a install.log
 echo "Detected OS: $machine" | tee -a install.log
 echo "Detected arch: $ARCH" | tee -a install.log
@@ -85,6 +91,10 @@ if [[ ! -d "$BIN_DIR" ]]; then
 fi
 
 echo "Creating separate tar.xz archives for each package directory inside $BIN_DIR (ignoring symlinks)..."
+
+# Get KISUKE_VERSION from GitHub Actions or VERSION file
+KISUKE_VER="${GITHUB_REF_NAME:-$(cat "$HOME/VERSION" 2>/dev/null || cat VERSION 2>/dev/null || echo 'dev')}"
+echo "Using Kisuke version: $KISUKE_VER"
 
 cd "$BIN_DIR"
 shopt -s nullglob
@@ -131,7 +141,12 @@ for pkg_dir in "${pkg_dirs[@]}"; do
         continue
     fi
 
-    tarname="kisuke-${PACKAGE_VERSION}-${machine}-${ARCH}-${pkg_dir}.tar.xz"
+    # Include KISUKE_VERSION and handle Alpine/musl naming
+    if [[ $IS_ALPINE -eq 1 ]]; then
+        tarname="kisuke-${KISUKE_VER}-${pkg_dir}-${PACKAGE_VERSION}-${machine}-musl-${ARCH}.tar.xz"
+    else
+        tarname="kisuke-${KISUKE_VER}-${pkg_dir}-${PACKAGE_VERSION}-${machine}-${ARCH}.tar.xz"
+    fi
     echo "Archiving $pkg_dir (version: $PACKAGE_VERSION) into $tarname"
     (
         cd "$HOME"
