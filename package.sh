@@ -24,20 +24,29 @@ esac
 NODEJS_BIN_DIR="$BIN_DIR/nodejs/bin"
 export PATH="$BIN_DIR:$NODEJS_BIN_DIR:$PATH"
 
-uname_m=$(uname -m)
-os_id=""
-if [[ -f /etc/os-release ]]; then
-    os_id=$(grep -E '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"')
-fi
-if [[ "$os_id" == "raspbian" ]]; then
-    ARCH="aarch64"
+# Allow architecture override from GitHub Actions
+if [[ -n "${OVERRIDE_ARCH:-}" ]]; then
+    ARCH="$OVERRIDE_ARCH"
+    echo "Using override architecture: $ARCH"
 else
-    case "$uname_m" in
-        arm64|aarch64) ARCH="arm64" ;;
-        x86_64|amd64)  ARCH="x86_64" ;;
-        *) KECHO ERROR "Unsupported architecture: $uname_m"; exit 1 ;;
-    esac
+    uname_m=$(uname -m)
+    os_id=""
+    if [[ -f /etc/os-release ]]; then
+        os_id=$(grep -E '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"')
+    fi
+    if [[ "$os_id" == "raspbian" ]]; then
+        ARCH="aarch64"
+    else
+        case "$uname_m" in
+            arm64|aarch64) ARCH="arm64" ;;
+            x86_64|amd64)  ARCH="x86_64" ;;
+            *) KECHO ERROR "Unsupported architecture: $uname_m"; exit 1 ;;
+        esac
+    fi
 fi
+
+# Export ARCH so child scripts can use it
+export ARCH
 
 
 rm -rf install.log

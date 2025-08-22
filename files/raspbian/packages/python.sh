@@ -5,7 +5,8 @@ BIN_DIR="$HOME/.kisuke/bin"
 PYTHON_DIR="$HOME/.kisuke/bin/python3"
 mkdir -p "$BIN_DIR" "$PYTHON_DIR"
 
-ARCH=$(uname -m)
+# Use exported ARCH from package.sh or fall back to uname -m
+ARCH="${ARCH:-$(uname -m)}"
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 
 echo "[KECHO] Detected OS=$OS, ARCH=$ARCH"

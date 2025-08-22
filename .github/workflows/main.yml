@@ -50,7 +50,15 @@ jobs:
 
       - name: Run package.sh
         shell: bash
-        run: bash package.sh
+        run: |
+          # Map matrix.arch to package.sh format
+          if [[ "${{ matrix.arch }}" == "x64" ]]; then
+            export OVERRIDE_ARCH="x86_64"
+          else
+            export OVERRIDE_ARCH="arm64"
+          fi
+          echo "Building for architecture: $OVERRIDE_ARCH"
+          bash package.sh
       
       - name: List and prepare files for upload
         id: prepare_files

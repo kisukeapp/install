@@ -7,10 +7,11 @@ NODE_VERSION="v22.9.0"
 
 mkdir -p "$BIN_DIR"
 
-ARCH="$(uname -m)"
+# Use exported ARCH from package.sh or fall back to uname -m
+ARCH="${ARCH:-$(uname -m)}"
 case "$ARCH" in
     x86_64) NODE_ARCH="x64" ;;
-    aarch64) NODE_ARCH="arm64" ;;
+    aarch64|arm64) NODE_ARCH="arm64" ;;
     *) echo "[KECHO] Unsupported architecture: $ARCH" && exit 1 ;;
 esac
 

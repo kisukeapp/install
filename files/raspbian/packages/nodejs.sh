@@ -8,7 +8,8 @@ NODE_VERSION="v22.9.0"
 
 mkdir -p "$BIN_DIR"
 
-ARCH="$(uname -m)"
+# Use exported ARCH from package.sh or fall back to uname -m
+ARCH="${ARCH:-$(uname -m)}"
 if grep -qi '^ID=raspbian' /etc/os-release 2>/dev/null; then
     ARCH="armv7l"
 fi
