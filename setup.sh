@@ -363,27 +363,47 @@ verify_installation() {
 
 install_system_package() {
     local pkg="$1" pkg_name="$1"
+    
+    # Check if already installed first
+    if command -v "$pkg" >/dev/null 2>&1; then
+        return 0  # Already installed, success
+    fi
+    
     [[ "$pkg" == "git"  && "$PKG_MGR" == "portage" ]] && pkg_name="dev-vcs/git"
     [[ "$pkg" == "tmux" && "$PKG_MGR" == "portage" ]] && pkg_name="app-misc/tmux"
+    
     if [[ "$PKG_MGR" == "unknown" ]]; then
-        log ERROR "No supported package manager found"; return 1
+        log ERROR "No supported package manager found"
+        return 1
     fi
+    
     local sudo_cmd=""
-    # Use id -u for POSIX compatibility (instead of Bash-specific $EUID)
-    [[ $(id -u) -ne 0 && "$PKG_MGR" != "brew" ]] && sudo_cmd="sudo"
+    # In app mode, ALWAYS use sudo (except for brew)
+    if [[ $MOBILE_APP -eq 1 ]]; then
+        [[ "$PKG_MGR" != "brew" ]] && sudo_cmd="sudo"
+    else
+        # Normal mode - only use sudo if not root
+        [[ $(id -u) -ne 0 && "$PKG_MGR" != "brew" ]] && sudo_cmd="sudo"
+    fi
+    
     local pkg_cmd
     if ! pkg_cmd=$(get_pkg_manager_cmd "$PKG_MGR"); then
         log ERROR "Failed to get package manager command"
         return 1
     fi
-    if eval "$sudo_cmd $pkg_cmd $pkg_name" >/dev/null 2>&1; then
+    
+    # Remove silent output redirection to see errors
+    if eval "$sudo_cmd $pkg_cmd $pkg_name"; then
         local ver
         if ! ver=$(get_version "$pkg"); then
             ver="unknown"
         fi
-        cache_set "$pkg" "$ver"; return 0
+        cache_set "$pkg" "$ver"
+        return 0
     fi
-    log ERROR "Failed to install $pkg using $PKG_MGR"; return 1
+    
+    log ERROR "Failed to install $pkg using $PKG_MGR"
+    return 1
 }
 
 install_jq() {
@@ -841,14 +861,25 @@ handle_install() {
         
         case "$pkg" in
             git|tmux)
-                if install_system_package "$pkg"; then
-                    log OK "$pkg installed"
-                    [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] OK LOCAL_BIN $pkg installed"
+                # Check if already installed to avoid unnecessary sudo
+                if command -v "$pkg" >/dev/null 2>&1; then
+                    local ver
+                    if ! ver=$(get_version "$pkg"); then
+                        ver="unknown"
+                    fi
+                    log OK "$pkg already installed (v$ver)"
+                    [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] OK LOCAL_BIN $pkg already installed"
                 else
-                    log ERROR "Failed to install $pkg"
-                    [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR Failed to install $pkg - this is a critical failure"
-                    failed_packages=("${failed_packages[@]}" "$pkg")
-                    has_critical_failure=1
+                    # Not installed - attempt installation
+                    if install_system_package "$pkg"; then
+                        log OK "$pkg installed"
+                        [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] OK LOCAL_BIN $pkg installed"
+                    else
+                        log ERROR "Failed to install $pkg"
+                        [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR Failed to install $pkg - this is a critical failure"
+                        failed_packages=("${failed_packages[@]}" "$pkg")
+                        has_critical_failure=1
+                    fi
                 fi
                 ;;
             jq)
