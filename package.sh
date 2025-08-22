@@ -179,7 +179,8 @@ for pkg_dir in "${pkg_dirs[@]}"; do
         else
             TAR_CMD="tar"
         fi
-        $TAR_CMD -cf "$tarname" -I "xz -9e -T0" ".kisuke/bin/${pkg_dir}" >/dev/null
+        echo "Compressing archive (this may take a moment)..."
+        $TAR_CMD -cf "$tarname" -I "xz -3 -T2" ".kisuke/bin/${pkg_dir}"
     )
 done
 

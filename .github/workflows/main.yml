@@ -14,15 +14,19 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
     if: github.event_name == 'release' || (github.event_name == 'push' && contains(fromJson('["OWNER", "COLLABORATOR", "MEMBER"]'), github.event.sender.type)) || github.event_name == 'workflow_dispatch'
     
     strategy:
       matrix:
-        arch: [x64, arm64]
+        include:
+          - arch: x64
+            runner: ubuntu-latest
+            override_arch: x86_64
+          - arch: arm64
+            runner: buildjet-4vcpu-ubuntu-2204-arm
+            override_arch: arm64
     
-    container:
-      image: ubuntu:22.04
+    runs-on: ${{ matrix.runner }}
     
     steps:
       - uses: actions/checkout@v4
@@ -37,8 +41,8 @@ jobs:
       
       - name: Install dependencies
         run: |
-          apt-get update
-          apt-get install -y apt-utils zip sudo bash
+          sudo apt-get update
+          sudo apt-get install -y curl tar xz-utils git build-essential
       
       - name: Debug bash version
         run: |
@@ -51,13 +55,8 @@ jobs:
       - name: Run package.sh
         shell: bash
         run: |
-          # Map matrix.arch to package.sh format
-          if [[ "${{ matrix.arch }}" == "x64" ]]; then
-            export OVERRIDE_ARCH="x86_64"
-          else
-            export OVERRIDE_ARCH="arm64"
-          fi
-          echo "Building for architecture: $OVERRIDE_ARCH"
+          export OVERRIDE_ARCH="${{ matrix.override_arch }}"
+          echo "Building for architecture: $OVERRIDE_ARCH on runner: ${{ matrix.runner }}"
           bash package.sh
       
       - name: List and prepare files for upload

@@ -18,7 +18,7 @@ case "$OS" in
         PYTHON_URL="https://github.com/astral-sh/python-build-standalone/releases/download/20250808/cpython-3.12.11+20250808-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
         ;;
       aarch64|arm64)
-        PYTHON_URL="https://github.com/astral-sh/python-build-standalone/releases/download/20250808/cpython-3.12.11+20250808-armv7-unknown-linux-gnueabihf-install_only_stripped.tar.gz"
+        PYTHON_URL="https://github.com/astral-sh/python-build-standalone/releases/download/20250808/cpython-3.13.6+20250808-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz"
         ;;
       *)
         echo "Unsupported Linux architecture: $ARCH"

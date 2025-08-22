@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BIN_DIR="$HOME/.kisuke/bin" && export PATH="${BIN_DIR}:${PATH}" && NODEJS_BIN_DIR="$HOME/.kisuke/bin/nodejs/bin" && export PATH="${NODEJS_BIN_DIR}:${PATH}"
+BIN_DIR="$HOME/.kisuke/bin"
+export PATH="${BIN_DIR}:${PATH}"
 
 NODE_VERSION="v22.9.0"
 
@@ -9,21 +10,33 @@ mkdir -p "$BIN_DIR"
 
 # Use exported ARCH from package.sh or fall back to uname -m
 ARCH="${ARCH:-$(uname -m)}"
+OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+
 case "$ARCH" in
     x86_64) NODE_ARCH="x64" ;;
     aarch64|arm64) NODE_ARCH="arm64" ;;
     *) echo "[KECHO] Unsupported architecture: $ARCH" && exit 1 ;;
 esac
 
+case "$OS" in
+    linux) NODE_OS="linux" ;;
+    darwin) NODE_OS="darwin" ;;
+    *)
+        echo "[KECHO] Unsupported OS: $OS"
+        exit 1
+        ;;
+esac
+
 cd /tmp
 echo "[KECHO] PROGRESS NODEJS PACKAGE 0%"
-curl -LO "https://unofficial-builds.nodejs.org/download/release/${NODE_VERSION}/node-${NODE_VERSION}-linux-${NODE_ARCH}-musl.tar.xz"
+NODE_DIST="node-${NODE_VERSION}-${NODE_OS}-${NODE_ARCH}.tar.xz"
+curl -LO "https://nodejs.org/dist/${NODE_VERSION}/${NODE_DIST}"
 echo "[KECHO] PROGRESS NODEJS PACKAGE 30%"
 
-tar -xf "node-${NODE_VERSION}-linux-${NODE_ARCH}-musl.tar.xz"
+tar -xf "$NODE_DIST"
 echo "[KECHO] PROGRESS NODEJS PACKAGE 60%"
 
-mv "node-${NODE_VERSION}-linux-${NODE_ARCH}-musl" "${BIN_DIR}/nodejs"
+mv "node-${NODE_VERSION}-${NODE_OS}-${NODE_ARCH}" "${BIN_DIR}/nodejs"
 echo "[KECHO] PROGRESS NODEJS PACKAGE 70%"
 
 # Symlinks

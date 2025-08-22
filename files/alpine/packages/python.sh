@@ -11,15 +11,37 @@ OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 
 echo "[KECHO] Detected OS=$OS, ARCH=$ARCH"
 
-case "$ARCH" in
-  x86_64)
-    PYTHON_URL="https://github.com/astral-sh/python-build-standalone/releases/download/20250808/cpython-3.12.11+20250808-x86_64-unknown-linux-musl-install_only_stripped.tar.gz"
+case "$OS" in
+  linux)
+    case "$ARCH" in
+      x86_64)
+        PYTHON_URL="https://github.com/astral-sh/python-build-standalone/releases/download/20250808/cpython-3.12.11+20250808-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
+        ;;
+      aarch64|arm64)
+        PYTHON_URL="https://github.com/astral-sh/python-build-standalone/releases/download/20250808/cpython-3.13.6+20250808-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz"
+        ;;
+      *)
+        echo "Unsupported Linux architecture: $ARCH"
+        exit 1
+        ;;
+    esac
     ;;
-  aarch64|arm64)
-    PYTHON_URL="https://github.com/astral-sh/python-build-standalone/releases/download/20250808/cpython-3.13.6+20250808-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz"
+  darwin)
+    case "$ARCH" in
+      x86_64)
+        PYTHON_URL="https://github.com/astral-sh/python-build-standalone/releases/download/20250808/cpython-3.12.11+20250808-x86_64-apple-darwin-install_only_stripped.tar.gz"
+        ;;
+      arm64)
+        PYTHON_URL="https://github.com/astral-sh/python-build-standalone/releases/download/20250808/cpython-3.12.11+20250808-aarch64-apple-darwin-install_only_stripped.tar.gz"
+        ;;
+      *)
+        echo "Unsupported macOS architecture: $ARCH"
+        exit 1
+        ;;
+    esac
     ;;
   *)
-    echo "Unsupported Linux architecture: $ARCH"
+    echo "Unsupported OS: $OS"
     exit 1
     ;;
 esac
