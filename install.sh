@@ -2,7 +2,11 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Get script directory with error handling
+if ! SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; then
+    echo "[KECHO] ERROR Failed to determine script directory"
+    exit 1
+fi
 BIN_DIR="$HOME/.kisuke/bin"
 
 export PATH="${BIN_DIR}:${PATH}"
@@ -10,7 +14,8 @@ export DEBIAN_FRONTEND=noninteractive
 
 if [ -f /etc/os-release ]; then
     . /etc/os-release
-    DISTRO="${ID,,}"
+    # Use tr for lowercase conversion (Bash 3.2 compatible)
+    DISTRO=$(echo "$ID" | tr '[:upper:]' '[:lower:]')
 elif [[ "$(uname -s)" == "Darwin" ]]; then
     DISTRO="macos"
 else
@@ -23,25 +28,25 @@ FILES_DIR="${SCRIPT_DIR}/files/${DISTRO}"
 function is_installed() {
     local pkg="$1"
 
-    if command -v "$pkg" &>/dev/null; then
+    if command -v "$pkg" >/dev/null 2>&1; then
         return 0
     fi
 
     case "$DISTRO" in
         ubuntu|debian)
-            dpkg -s "$pkg" &>/dev/null && return 0
+            dpkg -s "$pkg" >/dev/null 2>&1 && return 0
             ;;
         fedora|centos|rhel)
-            rpm -q "$pkg" &>/dev/null && return 0
+            rpm -q "$pkg" >/dev/null 2>&1 && return 0
             ;;
         arch)
-            pacman -Q "$pkg" &>/dev/null && return 0
+            pacman -Q "$pkg" >/dev/null 2>&1 && return 0
             ;;
         opensuse*|sles)
-            zypper se -i "$pkg" &>/dev/null && return 0
+            zypper se -i "$pkg" >/dev/null 2>&1 && return 0
             ;;
         darwin|macos)
-            brew list "$pkg" &>/dev/null && return 0
+            brew list "$pkg" >/dev/null 2>&1 && return 0
             ;;
     esac
 

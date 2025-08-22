@@ -7,9 +7,9 @@ if ! sudo -n true; then
 fi
 
 echo "[KECHO] PROGRESS NODEJS DEPENDENCIES 0%"
-sudo apt-get update >/dev/null
+DEBIAN_FRONTEND=noninteractive sudo apt-get update -qq >/dev/null 2>&1
 echo "[KECHO] PROGRESS NODEJS DEPENDENCIES 40%"
-sudo apt-get install -y build-essential  >/dev/null
+DEBIAN_FRONTEND=noninteractive sudo apt-get install -y -qq build-essential >/dev/null 2>&1
 echo "[KECHO] PROGRESS NODEJS DEPENDENCIES 60%"
-sudo apt-get install -y curl  >/dev/null
+DEBIAN_FRONTEND=noninteractive sudo apt-get install -y -qq curl >/dev/null 2>&1
 echo "[KECHO] PROGRESS NODEJS DEPENDENCIES 100%"

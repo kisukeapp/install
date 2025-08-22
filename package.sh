@@ -10,7 +10,10 @@ rm -rf "$HOME/.kisuke"
 
 echo "[KECHO] Cleanup done."
 
-unameOut="$(uname -s)"
+# Get OS with error handling
+if ! unameOut="$(uname -s)"; then
+    unameOut="Linux"
+fi
 case "${unameOut}" in
     Linux*)     machine=linux ;;
     Darwin*)    machine=mac ;;
@@ -29,10 +32,15 @@ if [[ -n "${OVERRIDE_ARCH:-}" ]]; then
     ARCH="$OVERRIDE_ARCH"
     echo "Using override architecture: $ARCH"
 else
-    uname_m=$(uname -m)
+    # Get architecture with error handling
+    if ! uname_m=$(uname -m); then
+        uname_m="x86_64"
+    fi
     os_id=""
     if [[ -f /etc/os-release ]]; then
-        os_id=$(grep -E '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"')
+        if ! os_id=$(grep -E '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"'); then
+            os_id=""
+        fi
     fi
     if [[ "$os_id" == "raspbian" ]]; then
         ARCH="aarch64"
@@ -53,9 +61,13 @@ rm -rf install.log
 echo "[KECHO] Running install.sh..."
 bash install.sh | tee -a install.log
 
-DISTRO=$(grep '\[KECHO\] DEV_ENVIRONMENT' install.log | awk '{print $3}' || true)
+if ! DISTRO=$(grep '\[KECHO\] DEV_ENVIRONMENT' install.log | awk '{print $3}'); then
+    DISTRO=""
+fi
 if [[ -z "$DISTRO" && -f /etc/os-release ]]; then
-  DISTRO=$(grep -E '^ID=' /etc/os-release | cut -d= -f2)
+  if ! DISTRO=$(grep -E '^ID=' /etc/os-release | cut -d= -f2); then
+      DISTRO=""
+  fi
 fi
 
 if [[ -z "$DISTRO" ]]; then
@@ -72,6 +84,9 @@ fi
 echo "Detected distro: $DISTRO" | tee -a install.log
 echo "Detected OS: $machine" | tee -a install.log
 echo "Detected arch: $ARCH" | tee -a install.log
+
+# Export for non-interactive apt-get in dependency scripts
+export DEBIAN_FRONTEND=noninteractive
 
 if [[ -d "files/$DISTRO/dependencies" ]]; then
   for dep in files/$DISTRO/dependencies/*.sh; do

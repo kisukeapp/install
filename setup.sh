@@ -49,7 +49,11 @@ NODEJS_BIN_DIR="$BIN_DIR/nodejs/bin"
 INSTALL_MARKER_DIR="$HOME/.kisuke/installed"
 CACHE_DIR="$HOME/.kisuke/cache"
 SCRIPTS_DIR="$HOME/.kisuke/scripts"
-mkdir -p "$BIN_DIR" "$INSTALL_MARKER_DIR" "$CACHE_DIR" "$SCRIPTS_DIR"
+# Create directories with error handling (before log() is defined)
+mkdir -p "$BIN_DIR" "$INSTALL_MARKER_DIR" "$CACHE_DIR" "$SCRIPTS_DIR" || {
+    printf "%b\n" "\033[31m[ERROR]\033[0m Failed to create required directories" >&2
+    exit 1
+}
 
 # Globals
 MOBILE_APP=0 INSTALL=0 UNINSTALL=0 DEPLOY=0
@@ -63,19 +67,19 @@ log() {
     local level="$1" msg="$2"
     if [[ $MOBILE_APP -eq 1 ]]; then
         case "$level" in
-            ERROR) echo "[KECHO] ERROR $msg" ;;
-            NOTIFY) echo "[KECHO] NOTIFY $msg" ;;
-            OK) echo "[KECHO] OK $msg" ;;
-            ALERT) echo "[KECHO] ALERT $msg" ;;
-            *) echo "$msg" ;;
+            ERROR) printf "[KECHO] ERROR %s\n" "$msg" ;;
+            NOTIFY) printf "[KECHO] NOTIFY %s\n" "$msg" ;;
+            OK) printf "[KECHO] OK %s\n" "$msg" ;;
+            ALERT) printf "[KECHO] ALERT %s\n" "$msg" ;;
+            *) printf "%s\n" "$msg" ;;
         esac
     else
         case "$level" in
-            ERROR) printf "%b\n" "${COLOR_RED}[ERROR]${COLOR_RESET} $msg" >&2 ;;
-            NOTIFY) printf "%b\n" "${COLOR_CYAN}[INFO]${COLOR_RESET}  $msg" ;;
-            OK) printf "%b\n" "${COLOR_GREEN}[OK]${COLOR_RESET}    $msg" ;;
-            ALERT) printf "%b\n" "${COLOR_RED}[ALERT]${COLOR_RESET} $msg" >&2 ;;
-            *) echo "$msg" ;;
+            ERROR) printf "%b%s%b %s\n" "$COLOR_RED" "[ERROR]" "$COLOR_RESET" "$msg" >&2 ;;
+            NOTIFY) printf "%b%s%b  %s\n" "$COLOR_CYAN" "[INFO]" "$COLOR_RESET" "$msg" ;;
+            OK) printf "%b%s%b    %s\n" "$COLOR_GREEN" "[OK]" "$COLOR_RESET" "$msg" ;;
+            ALERT) printf "%b%s%b %s\n" "$COLOR_RED" "[ALERT]" "$COLOR_RESET" "$msg" >&2 ;;
+            *) printf "%s\n" "$msg" ;;
         esac
     fi
 }
@@ -156,7 +160,11 @@ detect_package_manager() {
 
 cache_set() {
     local pkg="$1" version="${2:-unknown}"
-    printf "version=%s\ntimestamp=%s\n" "$version" "$(date +%s)" > "$CACHE_DIR/$pkg.installed"
+    local timestamp
+    if ! timestamp=$(date +%s); then
+        timestamp="0"
+    fi
+    printf "version=%s\ntimestamp=%s\n" "$version" "$timestamp" > "$CACHE_DIR/$pkg.installed"
 }
 
 cache_get() {
@@ -364,17 +372,28 @@ install_system_package() {
     # Use id -u for POSIX compatibility (instead of Bash-specific $EUID)
     [[ $(id -u) -ne 0 && "$PKG_MGR" != "brew" ]] && sudo_cmd="sudo"
     local pkg_cmd
-    pkg_cmd=$(get_pkg_manager_cmd "$PKG_MGR")
+    if ! pkg_cmd=$(get_pkg_manager_cmd "$PKG_MGR"); then
+        log ERROR "Failed to get package manager command"
+        return 1
+    fi
     if eval "$sudo_cmd $pkg_cmd $pkg_name" >/dev/null 2>&1; then
-        cache_set "$pkg" "$(get_version "$pkg")"; return 0
+        local ver
+        if ! ver=$(get_version "$pkg"); then
+            ver="unknown"
+        fi
+        cache_set "$pkg" "$ver"; return 0
     fi
     log ERROR "Failed to install $pkg using $PKG_MGR"; return 1
 }
 
 install_jq() {
     local current_ver expected_ver
-    expected_ver=$(get_expected_version jq)
-    current_ver=$(get_version jq local)
+    if ! expected_ver=$(get_expected_version jq); then
+        expected_ver="1.7.1"
+    fi
+    if ! current_ver=$(get_version jq local); then
+        current_ver="unknown"
+    fi
     
     if [[ "$current_ver" == "$expected_ver" ]]; then
         log OK "jq is up-to-date (v$current_ver)"
@@ -414,8 +433,12 @@ install_ripgrep() {
     fi
     
     local current_ver expected_ver
-    expected_ver=$(get_expected_version ripgrep)
-    current_ver=$(get_version ripgrep local)
+    if ! expected_ver=$(get_expected_version ripgrep); then
+        expected_ver="14.1.1"
+    fi
+    if ! current_ver=$(get_version ripgrep local); then
+        current_ver="unknown"
+    fi
     
     if [[ "$current_ver" == "$expected_ver" ]]; then
         log OK "ripgrep is up-to-date (v$current_ver)"
@@ -460,7 +483,7 @@ install_ripgrep() {
         log ERROR "Failed to create temporary directory"
         return 1
     fi
-    trap "rm -rf '$temp_dir'" RETURN
+    trap "rm -rf '$temp_dir'; trap - RETURN" RETURN
     
     if curl -sSL -o "$temp_dir/$archive_name" "$url" && 
        tar -xzf "$temp_dir/$archive_name" -C "$temp_dir" &&
@@ -523,7 +546,9 @@ download_and_extract() {
        tar -xJf "$filename" -C "$HOME"; then
         echo "installed" > "$INSTALL_MARKER_DIR/$pkg.installed"
         local pkg_version
-        pkg_version=$(get_expected_version "$pkg")
+        if ! pkg_version=$(get_expected_version "$pkg"); then
+            pkg_version="unknown"
+        fi
         cache_set "${pkg}_local" "$pkg_version"
         create_symlinks "$pkg"
         log OK "$pkg installed successfully"
@@ -537,8 +562,13 @@ download_and_extract() {
 install_binary_package() {
     local pkg="$1"
     local current_ver expected_ver filename
-    current_ver=$(get_version "$pkg" local)
-    expected_ver=$(get_expected_version "$pkg")
+    if ! current_ver=$(get_version "$pkg" local); then
+        current_ver="unknown"
+    fi
+    if ! expected_ver=$(get_expected_version "$pkg"); then
+        log ERROR "Failed to get expected version for $pkg"
+        return 1
+    fi
     
     if [[ "$current_ver" == "$expected_ver" ]]; then
         log OK "$pkg is up-to-date (v$current_ver)"
@@ -548,10 +578,21 @@ install_binary_package() {
     log NOTIFY "Installing $pkg v$expected_ver..."
     
     # Use new filename format with KISUKE_VERSION and proper Alpine detection
-    if [[ "$DISTRO" == "alpine" ]]; then
-        filename="kisuke-${KISUKE_VERSION}-${pkg}-${expected_ver}-${OS}-musl-${ARCH}.tar.xz"
+    # In dev mode, fallback to old naming scheme
+    if [[ "$KISUKE_VERSION" == "INJECT_VERSION_HERE" ]]; then
+        # Dev mode - use old naming convention
+        if [[ "$DISTRO" == "alpine" ]]; then
+            filename="kisuke-${expected_ver}-${OS}-musl-${ARCH}-$pkg.tar.xz"
+        else
+            filename="kisuke-${expected_ver}-${OS}-${ARCH}-$pkg.tar.xz"
+        fi
     else
-        filename="kisuke-${KISUKE_VERSION}-${pkg}-${expected_ver}-${OS}-${ARCH}.tar.xz"
+        # Production mode - use new naming convention with KISUKE_VERSION
+        if [[ "$DISTRO" == "alpine" ]]; then
+            filename="kisuke-${KISUKE_VERSION}-${pkg}-${expected_ver}-${OS}-musl-${ARCH}.tar.xz"
+        else
+            filename="kisuke-${KISUKE_VERSION}-${pkg}-${expected_ver}-${OS}-${ARCH}.tar.xz"
+        fi
     fi
     
     download_and_extract "$pkg" "$filename"
@@ -561,14 +602,22 @@ install_claude_tools() {
     local sdk_status=0 cli_status=0
     if [[ -x "$BIN_DIR/python3/bin/pip" ]]; then
         local SDK_VER
-        SDK_VER=$(get_expected_version claude_sdk)
+        if ! SDK_VER=$(get_expected_version claude_sdk); then
+            SDK_VER="0.0.19"
+        fi
         local current_sdk
-        current_sdk=$(get_version claude_sdk)
+        if ! current_sdk=$(get_version claude_sdk); then
+            current_sdk="unknown"
+        fi
         
         if [[ "$current_sdk" != "$SDK_VER" ]]; then
             local ws_ver uv_ver
-            ws_ver=$(get_expected_version websockets)
-            uv_ver=$(get_expected_version uvloop)
+            if ! ws_ver=$(get_expected_version websockets); then
+                ws_ver="15.0.1"
+            fi
+            if ! uv_ver=$(get_expected_version uvloop); then
+                uv_ver="0.21.0"
+            fi
             if "$BIN_DIR/python3/bin/pip" install --force-reinstall --disable-pip-version-check --no-input -q "websockets==$ws_ver" "uvloop==$uv_ver" "claude-code-sdk==$SDK_VER"; then
                 cache_set "claude_sdk" "$SDK_VER"
                 log OK "claude-code-sdk installed v$SDK_VER"
@@ -585,9 +634,13 @@ install_claude_tools() {
     fi
     if [[ -x "$NODEJS_BIN_DIR/npm" ]]; then
         local CLI_VER
-        CLI_VER=$(get_expected_version claude_cli)
+        if ! CLI_VER=$(get_expected_version claude_cli); then
+            CLI_VER="1.0.71"
+        fi
         local current_cli
-        current_cli=$(get_version claude_cli)
+        if ! current_cli=$(get_version claude_cli); then
+            current_cli="unknown"
+        fi
         
         if [[ "$current_cli" != "$CLI_VER" ]]; then
             if "$NODEJS_BIN_DIR/npm" install -g "@anthropic-ai/claude-code@$CLI_VER" >/dev/null 2>&1; then
@@ -631,7 +684,9 @@ show_status() {
         
         for pkg in git tmux; do
             local ver
-            ver=$(get_version "$pkg")
+            if ! ver=$(get_version "$pkg"); then
+                ver="unknown"
+            fi
             if [[ "$ver" != "unknown" ]]; then
                 log OK "SYS_PACKAGE $pkg $ver"
             else
@@ -641,11 +696,15 @@ show_status() {
         local all_installed=true
         for pkg in jq ripgrep nodejs python3; do
             local ver expected status
-            ver=$(get_version "$pkg" local)
-            expected=$(get_expected_version "$pkg")
+            if ! ver=$(get_version "$pkg" local); then
+                ver="unknown"
+            fi
+            if ! expected=$(get_expected_version "$pkg"); then
+                expected="unknown"
+            fi
             status=$(format_status "$pkg" "$ver" "$expected")
             
-            if [[ "$status" == "not installed"* ]]; then
+            if [[ $status == not\ installed* ]]; then
                 log ERROR "LOCAL_BIN $pkg NOT_FOUND"
                 all_installed=false
             else
@@ -655,8 +714,12 @@ show_status() {
         
         [[ "$all_installed" == true ]] && log OK "LOCAL_BINARIES" || log ERROR "LOCAL_BINARIES"
         local CLAUDE_SDK_VER CLAUDE_CLI_VER
-        CLAUDE_SDK_VER=$(get_version claude_sdk)
-        CLAUDE_CLI_VER=$(get_version claude_cli)
+        if ! CLAUDE_SDK_VER=$(get_version claude_sdk); then
+            CLAUDE_SDK_VER="unknown"
+        fi
+        if ! CLAUDE_CLI_VER=$(get_version claude_cli); then
+            CLAUDE_CLI_VER="unknown"
+        fi
         
         if [[ "$CLAUDE_SDK_VER" != "unknown" && "$CLAUDE_CLI_VER" != "unknown" ]]; then
             log OK "CLAUDE_TOOLS"
@@ -673,9 +736,15 @@ show_status() {
         echo "  Architecture: $ARCH"
         echo "  Package Manager: $PKG_MGR"
         echo
-        local git_status tmux_status
-        git_status=$(format_status git "$(get_version git)")
-        tmux_status=$(format_status tmux "$(get_version tmux)")
+        local git_status tmux_status git_ver tmux_ver
+        if ! git_ver=$(get_version git); then
+            git_ver="unknown"
+        fi
+        if ! tmux_ver=$(get_version tmux); then
+            tmux_ver="unknown"
+        fi
+        git_status=$(format_status git "$git_ver")
+        tmux_status=$(format_status tmux "$tmux_ver")
         
         [[ "$git_status" != "not installed" && "$tmux_status" != "not installed" ]] && log OK "System Packages:" || log ERROR "System Packages:"
         echo "  git: $git_status"
@@ -686,17 +755,21 @@ show_status() {
         local local_status_jq local_status_ripgrep local_status_nodejs local_status_python3
         for pkg in jq ripgrep nodejs python3; do
             local ver expected
-            ver=$(get_version "$pkg" local)
-            expected=$(get_expected_version "$pkg")
+            if ! ver=$(get_version "$pkg" local); then
+                ver="unknown"
+            fi
+            if ! expected=$(get_expected_version "$pkg"); then
+                expected="unknown"
+            fi
             case "$pkg" in
                 jq) local_status_jq=$(format_status "$pkg" "$ver" "$expected")
-                    [[ "$local_status_jq" == "not installed"* ]] && all_installed=false ;;
+                    [[ $local_status_jq == not\ installed* ]] && all_installed=false ;;
                 ripgrep) local_status_ripgrep=$(format_status "$pkg" "$ver" "$expected")
-                    [[ "$local_status_ripgrep" == "not installed"* ]] && all_installed=false ;;
+                    [[ $local_status_ripgrep == not\ installed* ]] && all_installed=false ;;
                 nodejs) local_status_nodejs=$(format_status "$pkg" "$ver" "$expected")
-                    [[ "$local_status_nodejs" == "not installed"* ]] && all_installed=false ;;
+                    [[ $local_status_nodejs == not\ installed* ]] && all_installed=false ;;
                 python3) local_status_python3=$(format_status "$pkg" "$ver" "$expected")
-                    [[ "$local_status_python3" == "not installed"* ]] && all_installed=false ;;
+                    [[ $local_status_python3 == not\ installed* ]] && all_installed=false ;;
             esac
         done
         
@@ -710,7 +783,9 @@ show_status() {
         for binary in jq rg node npm npx python python3 pip pip3 claude; do
             if [[ -L "$BIN_DIR/$binary" ]]; then
                 local target
-                target=$(readlink "$BIN_DIR/$binary")
+                if ! target=$(readlink "$BIN_DIR/$binary" 2>/dev/null); then
+                    target="[error reading link]"
+                fi
                 echo "  $binary -> $target"
             elif [[ -x "$BIN_DIR/$binary" ]]; then
                 echo "  $binary (direct)"
@@ -718,13 +793,21 @@ show_status() {
         done
         echo
         local SDK_VER CLI_VER
-        SDK_VER=$(get_version claude_sdk)
-        CLI_VER=$(get_version claude_cli)
+        if ! SDK_VER=$(get_version claude_sdk); then
+            SDK_VER="unknown"
+        fi
+        if ! CLI_VER=$(get_version claude_cli); then
+            CLI_VER="unknown"
+        fi
         
         [[ "$SDK_VER" != "unknown" && "$CLI_VER" != "unknown" ]] && log OK "Claude Tools:" || log ERROR "Claude Tools:"
         local expected_sdk expected_cli
-        expected_sdk=$(get_expected_version claude_sdk)
-        expected_cli=$(get_expected_version claude_cli)
+        if ! expected_sdk=$(get_expected_version claude_sdk); then
+            expected_sdk="0.0.19"
+        fi
+        if ! expected_cli=$(get_expected_version claude_cli); then
+            expected_cli="1.0.71"
+        fi
         echo "  SDK: $(format_status claude_sdk "$SDK_VER" "$expected_sdk")"
         echo "  CLI: $(format_status claude_cli "$CLI_VER" "$expected_cli")"
         
@@ -824,7 +907,9 @@ handle_install() {
                 local deps_ok=1
                 
                 # Check nodejs dependency
-                nodejs_ver=$(get_version nodejs local)
+                if ! nodejs_ver=$(get_version nodejs local); then
+                    nodejs_ver="unknown"
+                fi
                 if [[ "$nodejs_ver" == "unknown" ]]; then
                     # Check if nodejs was already processed (either succeeded or failed)
                     # Check if nodejs was already processed
@@ -975,7 +1060,7 @@ deploy_scripts() {
         log ERROR "Failed to create temporary directory"
         return 1
     fi
-    trap "rm -rf '$temp_dir'" RETURN
+    trap "rm -rf '$temp_dir'; trap - RETURN" RETURN
 
     local releases_json="$temp_dir/releases-latest.json"
     local curl_headers=(-H "Accept: application/vnd.github+json")
@@ -1053,9 +1138,12 @@ deploy_scripts() {
 
     for script in "$extracted_scripts_dir"/*.py; do
         if [[ -f "$script" ]]; then
-            local script_name=$(basename "$script")
-            if cp "$script" "$SCRIPTS_DIR/$script_name"; then
-                chmod +x "$SCRIPTS_DIR/$script_name"
+            local script_name
+            if ! script_name=$(basename "$script"); then
+                log ERROR "Failed to get basename of $script"
+                continue
+            fi
+            if cp "$script" "$SCRIPTS_DIR/$script_name" && chmod +x "$SCRIPTS_DIR/$script_name"; then
                 log NOTIFY "Deployed $script_name"
                 deployed_count=$((deployed_count + 1))
             else
@@ -1067,9 +1155,12 @@ deploy_scripts() {
 
     for script in "$extracted_scripts_dir"/*; do
         if [[ -f "$script" && ! "$script" == *.py ]]; then
-            local script_name=$(basename "$script")
-            if cp "$script" "$SCRIPTS_DIR/$script_name"; then
-                chmod +x "$SCRIPTS_DIR/$script_name"
+            local script_name
+            if ! script_name=$(basename "$script"); then
+                log ERROR "Failed to get basename of $script"
+                continue
+            fi
+            if cp "$script" "$SCRIPTS_DIR/$script_name" && chmod +x "$SCRIPTS_DIR/$script_name"; then
                 log NOTIFY "Deployed $script_name"
                 deployed_count=$((deployed_count + 1))
             else
