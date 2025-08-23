@@ -1258,7 +1258,9 @@ write_version_file() {
     local version_file="$HOME/.kisuke/VERSION"
     echo "$KISUKE_VERSION" > "$version_file"
     log OK "Version $KISUKE_VERSION written to $version_file"
-    [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] OK VERSION $KISUKE_VERSION"
+    if [[ -n "$MOBILE_APP" && "$MOBILE_APP" -eq 1 ]]; then
+        echo "[KECHO] OK VERSION $KISUKE_VERSION"
+    fi
 }
 
 handle_uninstall() {
@@ -1354,20 +1356,28 @@ main() {
             # Only copy script and write version file if installation succeeded
             copy_setup_script
             write_version_file
-            [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] OK Installation complete"
+            if [[ -n "$MOBILE_APP" && "$MOBILE_APP" -eq 1 ]]; then
+                echo "[KECHO] OK Installation complete"
+            fi
         else
             log ERROR "Installation failed - VERSION file not created"
-            [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR Installation failed - setup incomplete"
+            if [[ -n "$MOBILE_APP" && "$MOBILE_APP" -eq 1 ]]; then
+                echo "[KECHO] ERROR Installation failed - setup incomplete"
+            fi
             exit 1
         fi
     elif [[ $DEPLOY -eq 1 ]]; then
         if deploy_scripts; then
             copy_setup_script
             write_version_file
-            [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] OK Deployment complete"
+            if [[ -n "$MOBILE_APP" && "$MOBILE_APP" -eq 1 ]]; then
+                echo "[KECHO] OK Deployment complete"
+            fi
         else
             log ERROR "Deployment failed - VERSION file not created"
-            [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR Deployment failed"
+            if [[ -n "$MOBILE_APP" && "$MOBILE_APP" -eq 1 ]]; then
+                echo "[KECHO] ERROR Deployment failed"
+            fi
             exit 1
         fi
     else
