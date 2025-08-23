@@ -1,5 +1,4 @@
 name: Build and Upload tar.xz Assets to Release
-
 on:
   push:
     tags:
@@ -15,18 +14,33 @@ permissions:
 jobs:
   build:
     if: github.event_name == 'release' || (github.event_name == 'push' && contains(fromJson('["OWNER", "COLLABORATOR", "MEMBER"]'), github.event.sender.type)) || github.event_name == 'workflow_dispatch'
-    
     strategy:
       matrix:
         include:
           - arch: x64
             runner: ubuntu-latest
             override_arch: x86_64
+            os: linux
           - arch: arm64
             runner: buildjet-4vcpu-ubuntu-2204-arm
             override_arch: arm64
+            os: linux
+          - arch: x64
+            runner: ubuntu-latest
+            override_arch: x86_64
+            os: alpine
+            container: alpine:latest
+          - arch: x64
+            runner: macos-13
+            override_arch: x86_64
+            os: macos
+          - arch: arm64
+            runner: macos-14
+            override_arch: arm64
+            os: macos
     
     runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container }}
     
     steps:
       - uses: actions/checkout@v4
@@ -36,13 +50,54 @@ jobs:
       
       - name: Inject version into setup.sh
         run: |
-          sed -i "s/^KISUKE_VERSION=\"INJECT_VERSION_HERE\"/KISUKE_VERSION=\"${GITHUB_REF_NAME}\"/" setup.sh
+          if [[ "${{ matrix.os }}" == "macos" ]]; then
+            # macOS uses BSD sed, need -i '' for in-place editing
+            sed -i '' "s/^KISUKE_VERSION=\"INJECT_VERSION_HERE\"/KISUKE_VERSION=\"${GITHUB_REF_NAME}\"/" setup.sh
+          else
+            # Linux uses GNU sed
+            sed -i "s/^KISUKE_VERSION=\"INJECT_VERSION_HERE\"/KISUKE_VERSION=\"${GITHUB_REF_NAME}\"/" setup.sh
+          fi
           echo "Injected version ${GITHUB_REF_NAME} into setup.sh"
       
-      - name: Install dependencies
+      - name: Install dependencies (Linux)
+        if: matrix.os == 'linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y curl tar xz-utils git build-essential
+      
+      - name: Install dependencies (Alpine)
+        if: matrix.os == 'alpine'
+        run: |
+          apk update
+          apk add --no-cache curl tar xz git build-base bash sudo
+          
+          # Verify installations
+          echo "Installed dependencies:"
+          which tar
+          tar --version | head -1
+          which xz
+          xz --version
+      
+      - name: Install dependencies (macOS)
+        if: matrix.os == 'macos'
+        run: |
+          # dont know if this is needed on macos runners, but just in case gonna add here
+          if ! command -v brew &> /dev/null; then
+            /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+          fi
+          
+          # Install required dependencies
+          brew install gnu-tar xz
+          
+          # Create symlinks or update PATH to use GNU tar
+          echo "$(brew --prefix)/opt/gnu-tar/libexec/gnubin" >> $GITHUB_PATH
+          
+          # Verify installations
+          echo "Installed dependencies:"
+          which tar
+          tar --version | head -1
+          which xz
+          xz --version
       
       - name: Debug bash version
         run: |
@@ -50,24 +105,24 @@ jobs:
           bash --version
           which bash
           ls -l $(which bash)
+          echo "OS: ${{ matrix.os }}"
+          echo "Architecture: ${{ matrix.arch }}"
         shell: bash
-
+      
       - name: Run package.sh
         shell: bash
         run: |
           export OVERRIDE_ARCH="${{ matrix.override_arch }}"
-          echo "Building for architecture: $OVERRIDE_ARCH on runner: ${{ matrix.runner }}"
+          export TARGET_OS="${{ matrix.os }}"
+          echo "Building for architecture: $OVERRIDE_ARCH on runner: ${{ matrix.runner }} (OS: ${{ matrix.os }})"
           bash package.sh
       
       - name: List and prepare files for upload
         id: prepare_files
         run: |
           ls -la $HOME/
-          
           find $HOME -maxdepth 1 -name "kisuke-*.tar.xz" -ls
-          
           cp $HOME/kisuke-*.tar.xz . 2>/dev/null || echo "No kisuke-*.tar.xz files found in $HOME"
-          
           ls -la .
           
           if [ -f "setup.sh" ]; then
@@ -76,6 +131,7 @@ jobs:
             echo "ERROR: setup.sh not found!"
             exit 1
           fi
+          
           if [ -f "VERSION" ]; then
             echo "VERSION file found, contents:"
             cat VERSION
@@ -84,7 +140,7 @@ jobs:
             exit 1
           fi
         shell: bash
-
+      
       - name: Bundle Python scripts
         run: |
           scripts_bundle="kisuke-bridge-${GITHUB_REF_NAME}.tar.xz"
@@ -93,12 +149,12 @@ jobs:
           echo "Created scripts bundle: $scripts_bundle"
           ls -la "$scripts_bundle"
         shell: bash
-
+      
       - name: List final files for upload
         run: |
           ls -la *.tar.xz setup.sh VERSION
         shell: bash
-
+      
       - name: Create release and upload files
         uses: softprops/action-gh-release@v1
         env:
