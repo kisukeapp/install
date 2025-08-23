@@ -121,26 +121,40 @@ KISUKE_VER="${GITHUB_REF_NAME:-$(cat "$HOME/VERSION" 2>/dev/null || cat VERSION 
 echo "Using Kisuke version: $KISUKE_VER"
 
 cd "$BIN_DIR"
-shopt -s nullglob
 
-declare -A main_binary=(
-  [python]="python3"
-  [nodejs]="node"
-)
+get_main_binary() {
+    local pkg="$1"
+    case "$pkg" in
+        python) echo "python3" ;;
+        nodejs) echo "node" ;;
+        *) echo "$pkg" ;;
+    esac
+}
 
-declare -A version_flags=(
-  [python]="--version"
-  [nodejs]="-v"
-)
+get_version_flag() {
+    local pkg="$1"
+    case "$pkg" in
+        python) echo "--version" ;;
+        nodejs) echo "-v" ;;
+        *) echo "--version" ;;
+    esac
+}
 
-pkg_dirs=()
+pkg_dirs=""
 for dir in */; do
-  [[ -L "$dir" ]] && echo "Skipping symlink directory: $dir" && continue
-  pkg_dirs+=("${dir%/}")
+    if [[ -L "$dir" ]]; then
+        echo "Skipping symlink directory: $dir"
+        continue
+    fi
+    if [[ -z "$pkg_dirs" ]]; then
+        pkg_dirs="${dir%/}"
+    else
+        pkg_dirs="$pkg_dirs ${dir%/}"
+    fi
 done
-echo "Package directories found: ${pkg_dirs[*]}"
+echo "Package directories found: $pkg_dirs"
 
-for pkg_dir in "${pkg_dirs[@]}"; do
+for pkg_dir in $pkg_dirs; do
     case "$pkg_dir" in
         python3) base_name="python" ;;
         nodejs) base_name="nodejs" ;;
@@ -149,10 +163,10 @@ for pkg_dir in "${pkg_dirs[@]}"; do
 
     echo "Processing $pkg_dir as $base_name"
 
-    bin_name="${main_binary[$base_name]:-$base_name}"
+    bin_name=$(get_main_binary "$base_name")
     bin_path="$BIN_DIR/$pkg_dir/bin/$bin_name"
     PACKAGE_VERSION="unknown-version"
-    version_flag="${version_flags[$base_name]:---version}"
+    version_flag=$(get_version_flag "$base_name")
 
     if [[ -x "$bin_path" ]]; then
         echo "Found executable: $bin_path"
@@ -184,5 +198,4 @@ for pkg_dir in "${pkg_dirs[@]}"; do
     )
 done
 
-shopt -u nullglob
 echo "All packages archived."
