@@ -94,10 +94,13 @@ parse_args() {
             --app) MOBILE_APP=1; parsing_install=0; parsing_uninstall=0 ;;
             --*) parsing_install=0; parsing_uninstall=0 ;;
             *) 
-                if [[ $parsing_install -eq 1 ]]; then
-                    INSTALL_PACKAGES=("${INSTALL_PACKAGES[@]}" "$arg")
-                elif [[ $parsing_uninstall -eq 1 ]]; then
-                    UNINSTALL_PACKAGES=("${UNINSTALL_PACKAGES[@]}" "$arg")
+                # Only add non-empty arguments to package arrays
+                if [[ -n "$arg" ]]; then
+                    if [[ $parsing_install -eq 1 ]]; then
+                        INSTALL_PACKAGES=("${INSTALL_PACKAGES[@]:-}" "$arg")
+                    elif [[ $parsing_uninstall -eq 1 ]]; then
+                        UNINSTALL_PACKAGES=("${UNINSTALL_PACKAGES[@]:-}" "$arg")
+                    fi
                 fi
                 ;;
         esac
@@ -169,37 +172,94 @@ cache_set() {
 
 cache_get() {
     local pkg="$1"
-    [[ -f "$CACHE_DIR/$pkg.installed" ]] && grep "^version=" "$CACHE_DIR/$pkg.installed" 2>/dev/null | cut -d'=' -f2
+    if [[ -f "$CACHE_DIR/$pkg.installed" ]]; then
+        grep "^version=" "$CACHE_DIR/$pkg.installed" 2>/dev/null | cut -d'=' -f2
+    fi
 }
 
 cache_exists() {
-    [[ -f "$CACHE_DIR/$1.installed" ]]
+    if [[ -f "$CACHE_DIR/$1.installed" ]]; then
+        return 0
+    else
+        return 1
+    fi
 }
 
 cache_remove() {
     rm -f "$CACHE_DIR/$1.installed"
 }
 
+# Fix for the get_version function - around line 200-250
 get_version() {
     local pkg="$1" type="${2:-system}"
     local cached_ver
     
-    if cached_ver=$(cache_get "${pkg}_${type}") && [[ "$cached_ver" != "unknown" ]]; then
+    if cached_ver=$(cache_get "${pkg}_${type}") && [[ -n "$cached_ver" && "$cached_ver" != "unknown" ]]; then
         echo "$cached_ver"
         return 0
     fi
     
     local ver="unknown"
     case "$pkg" in
-        git) command -v git >/dev/null && ver=$(git --version | awk '{print $3}') ;;
-        tmux) command -v tmux >/dev/null && ver=$(tmux -V | awk '{print $2}') ;;
-        nodejs) [[ "$type" == "local" && -x "$BIN_DIR/nodejs/bin/node" ]] && ver=$("$BIN_DIR/nodejs/bin/node" --version 2>/dev/null | sed 's/^v//') ;;
-        python3) [[ "$type" == "local" && -x "$BIN_DIR/python3/bin/python3" ]] && ver=$("$BIN_DIR/python3/bin/python3" --version | awk '{print $2}') ;;
-        jq) [[ "$type" == "local" && -x "$BIN_DIR/jq" ]] && ver=$("$BIN_DIR/jq" --version 2>/dev/null | sed 's/^jq-//') ;;
-        ripgrep) [[ "$type" == "local" && -x "$BIN_DIR/rg" ]] && ver=$("$BIN_DIR/rg" --version 2>/dev/null | head -n1 | awk '{print $2}') ;;
-        claude_sdk) [[ -x "$BIN_DIR/python3/bin/pip" ]] && { ver=$("$BIN_DIR/python3/bin/pip" show claude-code-sdk 2>/dev/null | awk '/^Version:/ {print $2}') || ver="unknown"; } ;;
-        claude_cli) command -v claude >/dev/null && ver=$(claude -v 2>/dev/null | awk '{print $1}') ;;
+        git) 
+            if command -v git >/dev/null 2>&1; then
+                ver=$(git --version 2>/dev/null | awk '{print $3}' || echo "unknown")
+                [[ -z "$ver" ]] && ver="unknown"
+            fi
+            ;;
+        tmux) 
+            if command -v tmux >/dev/null 2>&1; then
+                ver=$(tmux -V 2>/dev/null | awk '{print $2}' || echo "unknown")
+                [[ -z "$ver" ]] && ver="unknown"
+            fi
+            ;;
+        nodejs) 
+            if [[ "$type" == "local" && -x "$BIN_DIR/nodejs/bin/node" ]]; then
+                ver=$("$BIN_DIR/nodejs/bin/node" --version 2>/dev/null | sed 's/^v//' || echo "unknown")
+                [[ -z "$ver" ]] && ver="unknown"
+            fi
+            ;;
+        python3) 
+            if [[ "$type" == "local" && -x "$BIN_DIR/python3/bin/python3" ]]; then
+                ver=$("$BIN_DIR/python3/bin/python3" --version 2>/dev/null | awk '{print $2}' || echo "unknown")
+                [[ -z "$ver" ]] && ver="unknown"
+            fi
+            ;;
+        jq) 
+            if [[ "$type" == "local" && -x "$BIN_DIR/jq" ]]; then
+                ver=$("$BIN_DIR/jq" --version 2>/dev/null | sed 's/^jq-//' || echo "unknown")
+                [[ -z "$ver" ]] && ver="unknown"
+            fi
+            ;;
+        ripgrep) 
+            if [[ "$type" == "local" && -x "$BIN_DIR/rg" ]]; then
+                ver=$("$BIN_DIR/rg" --version 2>/dev/null | head -n1 | awk '{print $2}' || echo "unknown")
+                [[ -z "$ver" ]] && ver="unknown"
+            fi
+            ;;
+        claude_sdk) 
+            if [[ -x "$BIN_DIR/python3/bin/pip" ]]; then
+                # Use a temporary file to avoid command substitution issues in Bash 3.2
+                local temp_pip_output="/tmp/pip_show_$"
+                if "$BIN_DIR/python3/bin/pip" show claude-code-sdk >"$temp_pip_output" 2>/dev/null; then
+                    ver=$(awk '/^Version:/ {print $2}' "$temp_pip_output" 2>/dev/null)
+                else
+                    ver="unknown"
+                fi
+                rm -f "$temp_pip_output" 2>/dev/null || true
+                [[ -z "$ver" ]] && ver="unknown"
+            fi
+            ;;
+        claude_cli) 
+            if command -v claude >/dev/null 2>&1; then
+                ver=$(claude -v 2>/dev/null | awk '{print $1}' || echo "unknown")
+                [[ -z "$ver" ]] && ver="unknown"
+            fi
+            ;;
     esac
+    
+    # Final check to ensure we never return empty strings
+    [[ -z "$ver" ]] && ver="unknown"
     
     [[ "$ver" != "unknown" ]] && cache_set "${pkg}_${type}" "$ver" || cache_remove "${pkg}_${type}"
     echo "$ver"
@@ -309,7 +369,7 @@ remove_symlinks() {
         *)        return 0 ;;
     esac
 
-    for binary in "${binaries[@]}"; do
+    for binary in "${binaries[@]:-}"; do
         if [[ -L "$BIN_DIR/$binary" ]]; then
             rm -f "$BIN_DIR/$binary"
             log NOTIFY "Removed symlink: $binary"
@@ -616,11 +676,14 @@ install_binary_package() {
     # Use new filename format with KISUKE_VERSION and proper Alpine detection
     # In dev mode, fallback to old naming scheme
     if [[ "$KISUKE_VERSION" == "INJECT_VERSION_HERE" ]]; then
-        # Dev mode - use old naming convention
+        # Dev mode - this will change
+        KISUKE_VERSION="0.0.1"
+        # kisuke-3.12.11-mac-arm64-python3.tar.xz
+        # kisuke-0.0.1-python3-3.12.11-mac-x86_64.tar.xz
         if [[ "$DISTRO" == "alpine" ]]; then
-            filename="kisuke-${expected_ver}-${OS}-musl-${ARCH}-$pkg.tar.xz"
+            filename="kisuke-${KISUKE_VERSION}-${pkg}-${expected_ver}-${OS}-musl-${ARCH}.tar.xz"
         else
-            filename="kisuke-${expected_ver}-${OS}-${ARCH}-$pkg.tar.xz"
+            filename="kisuke-${KISUKE_VERSION}-${pkg}-${expected_ver}-${OS}-${ARCH}.tar.xz"
         fi
     else
         # Production mode - use new naming convention with KISUKE_VERSION
@@ -729,7 +792,7 @@ show_status() {
                 log ERROR "SYS_PACKAGE $pkg PACKAGE_NOT_INSTALLED"
             fi
         done
-        local all_installed=true
+        local all_installed=false
         for pkg in jq ripgrep nodejs python3; do
             local ver expected status
             if ! ver=$(get_version "$pkg" local); then
@@ -792,7 +855,7 @@ show_status() {
         echo "  git: $git_status"
         echo "  tmux: $tmux_status"
         echo
-        local all_installed=true
+        local all_installed=false
         # Use variables instead of associative array for Bash 3.2 compatibility
         local local_status_jq local_status_ripgrep local_status_nodejs local_status_python3
         for pkg in jq ripgrep nodejs python3; do
@@ -876,19 +939,23 @@ EOF
 }
 
 handle_install() {
-    local packages=("${@}")
-    local failed_packages=()
+    local failed_packages=""
     local has_critical_failure=0
-    local processed_packages=()  # Track what we've already processed to avoid redundancy
-    [[ ${#packages[@]} -eq 0 ]] && packages=(git tmux jq ripgrep nodejs python3 claude)
-    for pkg in "${packages[@]}"; do
-        case "$pkg" in
-            nodejs|python3|claude) validate_github_setup; break ;;
+    local processed_packages=""
+    if [[ $# -eq 0 ]]; then
+        set -- git tmux jq ripgrep nodejs python3 claude
+        log NOTIFY "Installing all packages: $*"
+    else
+        log NOTIFY "Installing specified packages: $*"
+    fi
+    
+    validate_github_setup
+    for pkg in "$@"; do
+        [[ -z "$pkg" ]] && continue
+        case ":$processed_packages:" in
+            *":$pkg:"*) continue ;;
         esac
-    done
-    for pkg in "${packages[@]}"; do
-        # Add to processed list to avoid redundant processing
-        processed_packages=("${processed_packages[@]}" "$pkg")
+        processed_packages="$processed_packages:$pkg"
         
         case "$pkg" in
             git|tmux)
@@ -908,7 +975,7 @@ handle_install() {
                     else
                         log ERROR "Failed to install $pkg"
                         [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR Failed to install $pkg - this is a critical failure"
-                        failed_packages=("${failed_packages[@]}" "$pkg")
+                        failed_packages="$failed_packages $pkg"
                         has_critical_failure=1
                     fi
                 fi
@@ -920,13 +987,13 @@ handle_install() {
                     else
                         log ERROR "jq verification failed"
                         [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR jq installed but verification failed"
-                        failed_packages=("${failed_packages[@]}" "jq")
+                        failed_packages="$failed_packages jq"
                         has_critical_failure=1
                     fi
                 else
                     log ERROR "Failed to install jq"
                     [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR Failed to install jq - this is a critical failure"
-                    failed_packages=("${failed_packages[@]}" "jq")
+                    failed_packages="$failed_packages jq"
                     has_critical_failure=1
                 fi
                 ;;
@@ -937,13 +1004,13 @@ handle_install() {
                     else
                         log ERROR "ripgrep verification failed"
                         [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR ripgrep installed but verification failed"
-                        failed_packages=("${failed_packages[@]}" "ripgrep")
+                        failed_packages="$failed_packages ripgrep"
                         has_critical_failure=1
                     fi
                 else
                     log ERROR "Failed to install ripgrep"
                     [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR Failed to install ripgrep - this is a critical failure"
-                    failed_packages=("${failed_packages[@]}" "ripgrep")
+                    failed_packages="$failed_packages ripgrep"
                     has_critical_failure=1
                 fi
                 ;;
@@ -954,127 +1021,150 @@ handle_install() {
                     else
                         log ERROR "$pkg verification failed"
                         [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR $pkg installed but verification failed"
-                        failed_packages=("${failed_packages[@]}" "$pkg")
+                        failed_packages="$failed_packages $pkg"
                         has_critical_failure=1
                     fi
                 else
                     log ERROR "Failed to install $pkg"
                     [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR Failed to install $pkg - this is a critical failure"
-                    failed_packages=("${failed_packages[@]}" "$pkg")
+                    failed_packages="$failed_packages $pkg"
                     has_critical_failure=1
                 fi
                 ;;
             claude)
-                local nodejs_ver
                 local deps_ok=1
-                
-                # Check nodejs dependency
+                local nodejs_ver
                 if ! nodejs_ver=$(get_version nodejs local); then
                     nodejs_ver="unknown"
                 fi
                 if [[ "$nodejs_ver" == "unknown" ]]; then
-                    # Check if nodejs was already processed (either succeeded or failed)
-                    # Check if nodejs was already processed
-                    local nodejs_processed=0 nodejs_failed=0
-                    for p in "${processed_packages[@]}"; do
-                        [[ "$p" == "nodejs" ]] && nodejs_processed=1 && break
-                    done
-                    if [[ $nodejs_processed -eq 1 ]]; then
-                        # Already processed - check if it failed
-                        for f in "${failed_packages[@]}"; do
-                            [[ "$f" == "nodejs" ]] && nodejs_failed=1 && break
-                        done
-                        if [[ $nodejs_failed -eq 1 ]]; then
-                            log ERROR "Claude requires nodejs which failed to install earlier"
-                            [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR Claude cannot be installed - nodejs dependency failed"
-                            failed_packages=("${failed_packages[@]}" "claude")
-                            has_critical_failure=1
-                            continue
-                        fi
-                    else
-                        # Not processed yet - install it now (solo claude install case)
-                        log NOTIFY "Claude requires Node.js. Installing..."
-                        if install_binary_package nodejs; then
-                            if verify_installation nodejs; then
-                                [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] OK LOCAL_BIN nodejs installed"
+                    case ":$processed_packages:" in
+                        *":nodejs:"*)
+                            case " $failed_packages " in
+                                *" nodejs "*)
+                                    log ERROR "Claude requires nodejs which failed to install earlier"
+                                    [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR Claude cannot be installed - nodejs dependency failed"
+                                    failed_packages="$failed_packages claude"
+                                    has_critical_failure=1
+                                    continue
+                                    ;;
+                            esac
+                            ;;
+                        *)
+                            log NOTIFY "Claude requires Node.js. Installing..."
+                            processed_packages="$processed_packages:nodejs"
+                            if install_binary_package nodejs; then
+                                if verify_installation nodejs; then
+                                    [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] OK LOCAL_BIN nodejs installed"
+                                else
+                                    log ERROR "nodejs verification failed"
+                                    [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR nodejs installed but verification failed"
+                                    failed_packages="$failed_packages nodejs"
+                                    deps_ok=0
+                                fi
                             else
-                                log ERROR "nodejs verification failed"
-                                [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR nodejs installed but verification failed"
-                                failed_packages=("${failed_packages[@]}" "nodejs")
+                                log ERROR "Failed to install nodejs dependency for Claude"
+                                [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR Failed to install nodejs - required for Claude"
+                                failed_packages="$failed_packages nodejs"
                                 deps_ok=0
                             fi
-                        else
-                            log ERROR "Failed to install nodejs dependency for Claude"
-                            [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR Failed to install nodejs - required for Claude"
-                            failed_packages=("${failed_packages[@]}" "nodejs")
-                            deps_ok=0
-                        fi
-                    fi
+                            ;;
+                    esac
                 fi
-                
-                # Check ripgrep dependency
-                if ! command -v rg >/dev/null 2>&1; then
-                    # Check if ripgrep was already processed
-                    # Check if ripgrep was already processed
-                    local ripgrep_processed=0 ripgrep_failed=0
-                    for p in "${processed_packages[@]}"; do
-                        [[ "$p" == "ripgrep" ]] && ripgrep_processed=1 && break
-                    done
-                    if [[ $ripgrep_processed -eq 1 ]]; then
-                        # Already processed - check if it failed
-                        for f in "${failed_packages[@]}"; do
-                            [[ "$f" == "ripgrep" ]] && ripgrep_failed=1 && break
-                        done
-                        if [[ $ripgrep_failed -eq 1 ]]; then
-                            log ERROR "Claude requires ripgrep which failed to install earlier"
-                            [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR Claude cannot be installed - ripgrep dependency failed"
-                            failed_packages=("${failed_packages[@]}" "claude")
-                            has_critical_failure=1
-                            continue
-                        fi
-                    else
-                        # Not processed yet - install it now (solo claude install case)
-                        log NOTIFY "Claude requires ripgrep. Installing..."
-                        if install_ripgrep; then
-                            if verify_installation ripgrep; then
-                                [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] OK LOCAL_BIN ripgrep installed"
+                local python_ver
+                if ! python_ver=$(get_version python3 local); then
+                    python_ver="unknown"
+                fi
+                if [[ "$python_ver" == "unknown" ]]; then
+                    case ":$processed_packages:" in
+                        *":python3:"*)
+                            case " $failed_packages " in
+                                *" python3 "*)
+                                    log ERROR "Claude SDK requires python3 which failed to install earlier"
+                                    [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR Claude cannot be installed - python3 dependency failed"
+                                    failed_packages="$failed_packages claude"
+                                    has_critical_failure=1
+                                    continue
+                                    ;;
+                            esac
+                            ;;
+                        *)
+                            log NOTIFY "claude-code-sdk requires Python. Installing..."
+                            processed_packages="$processed_packages:python3"
+                            if install_binary_package python3; then
+                                if verify_installation python3; then
+                                    [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] OK LOCAL_BIN python3 installed"
+                                else
+                                    log ERROR "python3 verification failed"
+                                    [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR python3 installed but verification failed"
+                                    failed_packages="$failed_packages python3"
+                                    deps_ok=0
+                                fi
                             else
-                                log ERROR "ripgrep verification failed"
-                                [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR ripgrep installed but verification failed"
-                                failed_packages=("${failed_packages[@]}" "ripgrep")
+                                log ERROR "Failed to install python3 dependency for claude-code-sdk"
+                                [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR Failed to install python - required for claude-code-sdk"
+                                failed_packages="$failed_packages python3"
                                 deps_ok=0
                             fi
-                        else
-                            log ERROR "Failed to install ripgrep dependency for Claude"
-                            [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR Failed to install ripgrep - required for Claude"
-                            failed_packages=("${failed_packages[@]}" "ripgrep")
-                            deps_ok=0
-                        fi
-                    fi
+                            ;;
+                    esac
+                fi
+                if ! command -v rg >/dev/null 2>&1; then
+                    case ":$processed_packages:" in
+                        *":ripgrep:"*)
+                            case " $failed_packages " in
+                                *" ripgrep "*)
+                                    log ERROR "Claude requires ripgrep which failed to install earlier"
+                                    [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR Claude cannot be installed - ripgrep dependency failed"
+                                    failed_packages="$failed_packages claude"
+                                    has_critical_failure=1
+                                    continue
+                                    ;;
+                            esac
+                            ;;
+                        *)
+                            log NOTIFY "Claude requires ripgrep. Installing..."
+                            processed_packages="$processed_packages:ripgrep"
+                            if install_ripgrep; then
+                                if verify_installation ripgrep; then
+                                    [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] OK LOCAL_BIN ripgrep installed"
+                                else
+                                    log ERROR "ripgrep verification failed"
+                                    [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR ripgrep installed but verification failed"
+                                    failed_packages="$failed_packages ripgrep"
+                                    deps_ok=0
+                                fi
+                            else
+                                log ERROR "Failed to install ripgrep dependency for Claude"
+                                [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR Failed to install ripgrep - required for Claude"
+                                failed_packages="$failed_packages ripgrep"
+                                deps_ok=0
+                            fi
+                            ;;
+                    esac
                 fi
                 
                 # Only try installing Claude if dependencies are satisfied
                 if [[ $deps_ok -eq 0 ]]; then
                     log ERROR "Claude installation skipped due to missing dependencies"
                     [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR Claude cannot be installed - dependencies failed"
-                    failed_packages=("${failed_packages[@]}" "claude")
+                    failed_packages="$failed_packages claude"
                     has_critical_failure=1
                     continue
                 fi
-                # Try installing Claude (dependencies already checked above)
                 if install_claude_tools; then
                     if verify_installation claude; then
                         [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] OK LOCAL_BIN claude installed"
                     else
                         log ERROR "claude verification failed"
                         [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR claude installed but verification failed"
-                        failed_packages=("${failed_packages[@]}" "claude")
+                        failed_packages="$failed_packages claude"
                         has_critical_failure=1
                     fi
                 else
                     log ERROR "Failed to install Claude tools"
                     [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR Failed to install Claude tools - this is a critical failure"
-                    failed_packages=("${failed_packages[@]}" "claude")
+                    failed_packages="$failed_packages claude"
                     has_critical_failure=1
                 fi
                 ;;
@@ -1086,8 +1176,8 @@ handle_install() {
     
     # Check if any critical failures occurred
     if [[ $has_critical_failure -eq 1 ]]; then
-        log ERROR "Installation failed for critical packages: ${failed_packages[*]}"
-        [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR Installation failed - critical packages missing: ${failed_packages[*]}"
+        log ERROR "Installation failed for critical packages:$failed_packages"
+        [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR Installation failed - critical packages missing:$failed_packages"
         return 1
     fi
     
@@ -1264,9 +1354,15 @@ write_version_file() {
 }
 
 handle_uninstall() {
-    local packages=("${@}")
-    [[ ${#packages[@]} -eq 0 ]] && packages=(jq ripgrep nodejs python3 claude git tmux)
-    for pkg in "${packages[@]}"; do
+    if [[ $# -eq 0 ]]; then
+        set -- jq ripgrep nodejs python3 claude git tmux
+        log NOTIFY "Uninstalling all packages: $*"
+    else
+        log NOTIFY "Uninstalling specified packages: $*"
+    fi
+    
+    # Process each package
+    for pkg in "$@"; do
         local removed=false
         # Use tr for lowercase conversion (Bash 3.2 compatible)
         # Use printf to avoid echo interpreting dash as option
