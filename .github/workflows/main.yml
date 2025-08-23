@@ -126,7 +126,7 @@ jobs:
       
       - name: Bundle Python scripts
         run: |
-          scripts_bundle="kisuke-bridge-${{ matrix.os }}-${{ matrix.arch }}-${GITHUB_REF_NAME}.tar.xz"
+          scripts_bundle="kisuke-bridge-${GITHUB_REF_NAME}.tar.xz"
           echo "Creating bundle: $scripts_bundle"
           tar -cJf "$scripts_bundle" scripts/
           echo "Created scripts bundle: $scripts_bundle"
