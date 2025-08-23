@@ -17,6 +17,7 @@ jobs:
     strategy:
       matrix:
         include:
+          # Linux builds
           - arch: x64
             runner: ubuntu-latest
             override_arch: x86_64
@@ -25,11 +26,7 @@ jobs:
             runner: buildjet-4vcpu-ubuntu-2204-arm
             override_arch: arm64
             os: linux
-          - arch: x64
-            runner: ubuntu-latest
-            override_arch: x86_64
-            os: alpine
-            container: alpine:latest
+          # macOS builds
           - arch: x64
             runner: macos-13
             override_arch: x86_64
@@ -40,7 +37,6 @@ jobs:
             os: macos
     
     runs-on: ${{ matrix.runner }}
-    container: ${{ matrix.container }}
     
     steps:
       - uses: actions/checkout@v4
@@ -65,23 +61,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y curl tar xz-utils git build-essential
       
-      - name: Install dependencies (Alpine)
-        if: matrix.os == 'alpine'
-        run: |
-          apk update
-          apk add --no-cache curl tar xz git build-base bash sudo
-          
-          # Verify installations
-          echo "Installed dependencies:"
-          which tar
-          tar --version | head -1
-          which xz
-          xz --version
-      
       - name: Install dependencies (macOS)
         if: matrix.os == 'macos'
         run: |
-          # dont know if this is needed on macos runners, but just in case gonna add here
+          # Install Homebrew if not present (shouldn't be needed on GitHub runners)
           if ! command -v brew &> /dev/null; then
             /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
           fi
@@ -143,7 +126,7 @@ jobs:
       
       - name: Bundle Python scripts
         run: |
-          scripts_bundle="kisuke-bridge-${GITHUB_REF_NAME}.tar.xz"
+          scripts_bundle="kisuke-bridge-${{ matrix.os }}-${{ matrix.arch }}-${GITHUB_REF_NAME}.tar.xz"
           echo "Creating bundle: $scripts_bundle"
           tar -cJf "$scripts_bundle" scripts/
           echo "Created scripts bundle: $scripts_bundle"
