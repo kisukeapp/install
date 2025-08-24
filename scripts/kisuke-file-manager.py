@@ -1003,6 +1003,306 @@ class RemoteFileManager:
                 'success': False,
                 'error': str(e)
             }
+    
+    def scan_projects(self, paths=None, max_depth=3, max_results=500, 
+                     follow_symlinks=False, use_ripgrep=True):
+        """Ultra-fast project discovery using ripgrep or find.
+        
+        Scans directories for project markers like .git, package.json, etc.
+        Uses ripgrep for blazing fast performance when available.
+        
+        Args:
+            paths: List of paths to scan. Defaults to common project locations.
+            max_depth: Maximum directory depth to scan.
+            max_results: Maximum number of projects to return.
+            follow_symlinks: Whether to follow symbolic links.
+            use_ripgrep: Try to use ripgrep for faster scanning.
+            
+        Returns:
+            Dictionary containing:
+                - success: Operation status
+                - projects: List of discovered projects with metadata
+                - total: Total number of projects found
+                - scan_method: 'ripgrep' or 'find'
+                - error: Error message if operation failed
+        """
+        try:
+            # Default paths if none provided
+            if not paths:
+                paths = [
+                    "~",
+                    "~/Projects", "~/projects",
+                    "~/Developer", "~/developer",
+                    "~/Documents",
+                    "~/Code", "~/code",
+                    "~/repos", "~/src",
+                    "~/workspace", "~/dev",
+                    "~/work", "~/git"
+                ]
+            
+            # Expand and validate paths
+            valid_paths = []
+            for p in paths:
+                expanded = os.path.expanduser(p)
+                if os.path.exists(expanded):
+                    valid_paths.append(expanded)
+            
+            if not valid_paths:
+                return {
+                    'success': False,
+                    'error': 'No valid paths to scan'
+                }
+            
+            discovered = {}  # Use dict to deduplicate by path
+            
+            # Project markers and their types
+            # Separate file markers from directory markers for proper handling
+            file_markers = [
+                ('package.json', 'node'),
+                ('Package.swift', 'swift'),
+                ('Cargo.toml', 'rust'),
+                ('go.mod', 'go'),
+                ('requirements.txt', 'python'),
+                ('pyproject.toml', 'python'),
+                ('setup.py', 'python'),
+                ('Gemfile', 'ruby'),
+                ('build.gradle', 'java'),
+                ('pom.xml', 'java'),
+                ('composer.json', 'php'),
+                ('pubspec.yaml', 'dart'),
+                ('Makefile', 'make'),
+                ('CMakeLists.txt', 'cmake'),
+                ('docker-compose.yml', 'docker'),
+                ('Dockerfile', 'docker')
+            ]
+            
+            directory_markers = [
+                ('.git', 'git'),
+                ('.xcworkspace', 'xcode'),  # Prioritize workspace over project
+                ('.xcodeproj', 'xcode'),
+                ('.venv', 'python'),
+                ('venv', 'python')
+            ]
+            
+            # Combined list for processing
+            all_markers = file_markers + directory_markers
+            
+            if use_ripgrep:
+                try:
+                    # Try using ripgrep for ultra-fast scanning
+                    for scan_path in valid_paths[:5]:  # Limit to first 5 paths for performance
+                        cmd = ['rg', '--files', '--hidden', '--no-ignore-vcs']
+                        
+                        # Add depth limit
+                        cmd.extend(['--max-depth', str(max_depth)])
+                        
+                        # Add follow symlinks if requested
+                        if follow_symlinks:
+                            cmd.append('-L')
+                        
+                        # Add glob patterns for all project markers
+                        # Files first
+                        for marker, _ in file_markers:
+                            cmd.extend(['-g', f'**/{marker}'])
+                        
+                        # Then directories - match any file inside them
+                        for marker, _ in directory_markers:
+                            cmd.extend(['-g', f'**/{marker}/**'])
+                        
+                        # Exclude common large directories
+                        exclude_patterns = [
+                            'node_modules', '.cache', 'target', 'dist',
+                            'build', 'out', '.next', '.nuxt', 'vendor',
+                            '*.min.js', '*.bundle.js', 'coverage'
+                        ]
+                        
+                        for pattern in exclude_patterns:
+                            cmd.extend(['--glob', f'!**/{pattern}/**'])
+                        
+                        cmd.append(scan_path)
+                        
+                        # Run ripgrep
+                        result = subprocess.run(cmd, capture_output=True, text=True, 
+                                              timeout=10, check=False)
+                        
+                        if result.returncode in [0, 1]:  # 0=found matches, 1=no matches (but successful)
+                            # Process results
+                            for line in result.stdout.strip().split('\n'):
+                                if not line:
+                                    continue
+                                
+                                # Determine project root and type
+                                project_path = None
+                                project_type = None
+                                marker_found = None
+                                
+                                # Check file markers first
+                                for marker, proj_type in file_markers:
+                                    if marker in line and line.endswith(marker):
+                                        project_path = os.path.dirname(line)
+                                        project_type = proj_type
+                                        marker_found = marker
+                                        break
+                                
+                                # Then check directory markers
+                                if not project_path:
+                                    for marker, proj_type in directory_markers:
+                                        if f'/{marker}/' in line:
+                                            # Extract path up to the marker directory
+                                            parts = line.split(f'/{marker}/')
+                                            if parts:
+                                                project_path = parts[0]
+                                                project_type = proj_type
+                                                marker_found = marker
+                                                break
+                                
+                                if project_path and project_path not in discovered:
+                                    project_name = os.path.basename(project_path)
+                                    # Handle case where project is at root
+                                    if not project_name:
+                                        project_name = os.path.basename(os.path.dirname(project_path))
+                                    
+                                    discovered[project_path] = {
+                                        'name': project_name,
+                                        'path': project_path,
+                                        'type': project_type,
+                                        'marker': marker_found
+                                    }
+                                    
+                                    if len(discovered) >= max_results:
+                                        break
+                                
+                                if len(discovered) >= max_results:
+                                    break
+                        
+                        if len(discovered) >= max_results:
+                            break
+                    
+                    # If ripgrep succeeded
+                    if discovered:
+                        return {
+                            'success': True,
+                            'projects': list(discovered.values()),
+                            'total': len(discovered),
+                            'scan_method': 'ripgrep'
+                        }
+                    
+                except (subprocess.TimeoutExpired, FileNotFoundError):
+                    pass  # Fall back to find
+            
+            # Fallback to find command if ripgrep not available or failed
+            for scan_path in valid_paths[:3]:  # Limit paths for find
+                # Build find command for all markers
+                find_cmd = ['find', scan_path, '-maxdepth', str(max_depth)]
+                
+                if follow_symlinks:
+                    find_cmd.append('-L')
+                
+                # Add all marker patterns
+                find_cmd.append('(')
+                first = True
+                
+                # Add file markers
+                for marker, _ in file_markers[:8]:  # Limit for performance
+                    if not first:
+                        find_cmd.append('-o')
+                    find_cmd.extend(['-type', 'f', '-name', marker])
+                    first = False
+                
+                # Add directory markers
+                for marker, _ in directory_markers:
+                    if not first:
+                        find_cmd.append('-o')
+                    find_cmd.extend(['-type', 'd', '-name', marker])
+                    first = False
+                    
+                find_cmd.append(')')
+                
+                # Add exclusions
+                find_cmd.extend([
+                    '!', '-path', '*/node_modules/*',
+                    '!', '-path', '*/.cache/*',
+                    '!', '-path', '*/vendor/*'
+                ])
+                
+                try:
+                    result = subprocess.run(find_cmd, capture_output=True, text=True,
+                                          timeout=15, check=False)
+                    
+                    if result.returncode == 0:
+                        for line in result.stdout.strip().split('\n'):
+                            if not line:
+                                continue
+                            
+                            # Determine project type and root
+                            project_path = None
+                            project_type = None
+                            marker_found = None
+                            
+                            # Check if it's a file marker
+                            for marker, proj_type in file_markers:
+                                if line.endswith('/' + marker):
+                                    project_path = os.path.dirname(line)
+                                    project_type = proj_type
+                                    marker_found = marker
+                                    break
+                            
+                            # Check if it's a directory marker
+                            if not project_path:
+                                for marker, proj_type in directory_markers:
+                                    if line.endswith('/' + marker) or line.endswith('/' + marker + '/'):
+                                        # Directory found - project is its parent
+                                        project_path = os.path.dirname(line.rstrip('/'))
+                                        project_type = proj_type
+                                        marker_found = marker
+                                        break
+                            
+                            if project_path and project_path not in discovered:
+                                project_name = os.path.basename(project_path)
+                                # Handle case where project is at root
+                                if not project_name:
+                                    project_name = os.path.basename(os.path.dirname(project_path))
+                                    
+                                discovered[project_path] = {
+                                    'name': project_name,
+                                    'path': project_path,
+                                    'type': project_type,
+                                    'marker': marker_found
+                                }
+                                
+                                if len(discovered) >= max_results:
+                                    break
+                            
+                            if len(discovered) >= max_results:
+                                break
+                    
+                    if len(discovered) >= max_results:
+                        break
+                        
+                except subprocess.TimeoutExpired:
+                    if discovered:  # Return what we have so far
+                        break
+                    else:
+                        return {
+                            'success': False,
+                            'error': 'Scan timeout - filesystem too large'
+                        }
+            
+            # Sort projects by name
+            projects = sorted(discovered.values(), key=lambda x: x['name'].lower())
+            
+            return {
+                'success': True,
+                'projects': projects,
+                'total': len(projects),
+                'scan_method': 'find'
+            }
+            
+        except Exception as e:
+            return {
+                'success': False,
+                'error': str(e)
+            }
 
 def main():
     """Main entry point for the file manager CLI.
@@ -1027,6 +1327,7 @@ def main():
         apply_patch: Apply patch to file
         generate_diff: Generate diff between contents
         ripgrep: Fast search using ripgrep
+        scan_projects: Scan for projects using ripgrep or find
     """
     if len(sys.argv) < 2:
         print(json.dumps({
@@ -1073,6 +1374,8 @@ def main():
             result = manager.generate_diff(**args)
         elif command == 'ripgrep':
             result = manager.ripgrep_search(**args)
+        elif command == 'scan_projects':
+            result = manager.scan_projects(**args)
         else:
             result = {
                 'success': False,
