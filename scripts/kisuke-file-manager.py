@@ -1111,55 +1111,67 @@ class RemoteFileManager:
             List of processed and filtered projects
         """
         filtered_projects = {}
-        parent_dirs = {}  # Track parent directories to avoid duplicates like .next
+        build_artifact_names = {'.next', '.nuxt', 'dist', 'build', 'out', 'target', 
+                               'node_modules', 'vendor', '.cache', 'coverage',
+                               '__pycache__', '.pytest_cache', '.tox',
+                               'DerivedData', 'Build', '.build'}
         
-        for project_path, project_info in discovered.items():
-            # Skip build artifacts (double-check)
-            if self.is_build_artifact(project_path):
+        # Normalize all paths first
+        normalized_discovered = {}
+        for path, info in discovered.items():
+            normalized_path = os.path.normpath(path.rstrip('/'))
+            info['path'] = normalized_path  # Update the path in info too
+            normalized_discovered[normalized_path] = info
+        
+        for project_path, project_info in normalized_discovered.items():
+            # Get the project name and markers
+            project_name = os.path.basename(project_path)
+            project_markers = project_info.get('markers', [])
+            if not project_markers and 'marker' in project_info:
+                project_markers = [project_info['marker']]
+            
+            # Skip if it's a build artifact WITHOUT any project markers
+            # This allows a folder named "build" with a package.json to be kept
+            if project_name in build_artifact_names and not project_markers:
                 continue
             
-            # Get parent directory
-            parent_dir = os.path.dirname(project_path)
+            # Check relationships with already processed projects
+            skip_project = False
+            to_replace = []
             
-            # If we already have a project in the same parent directory,
-            # keep the one that's more likely to be the real project
-            if parent_dir in parent_dirs:
-                existing_path = parent_dirs[parent_dir]
-                existing_info = filtered_projects.get(existing_path, {})
+            for existing_path, existing_info in list(filtered_projects.items()):
+                # Normalize for comparison
+                existing_path_normalized = os.path.normpath(existing_path)
                 
-                # Prefer non-dot directories over dot directories
-                existing_is_dot = os.path.basename(existing_path).startswith('.')
-                new_is_dot = os.path.basename(project_path).startswith('.')
-                
-                if new_is_dot and not existing_is_dot:
-                    # Keep existing, skip new
-                    continue
-                elif existing_is_dot and not new_is_dot:
-                    # Replace existing with new
-                    del filtered_projects[existing_path]
-                    parent_dirs[parent_dir] = project_path
-                else:
-                    # Both are similar, keep the one with higher priority markers
+                # Check if new project is inside an existing project
+                if project_path.startswith(existing_path_normalized + os.sep):
+                    # New is inside existing
+                    # Only skip if it has no markers AND is a build artifact name
+                    if not project_markers and project_name in build_artifact_names:
+                        skip_project = True
+                        break
+                    # Otherwise it's a valid nested project (like monorepo package), keep it
+                    
+                # Check if existing project is inside the new project
+                elif existing_path_normalized.startswith(project_path + os.sep):
+                    # Existing is inside new
                     existing_markers = existing_info.get('markers', [])
-                    new_markers = project_info.get('markers', [])
+                    existing_name = os.path.basename(existing_path_normalized)
                     
-                    # Check for priority markers
-                    priority_markers = ['package.json', 'Cargo.toml', 'go.mod', 'Package.Swift']
-                    existing_has_priority = any(m in priority_markers for m in existing_markers)
-                    new_has_priority = any(m in priority_markers for m in new_markers)
-                    
-                    if existing_has_priority and not new_has_priority:
-                        continue  # Keep existing
-                    elif new_has_priority and not existing_has_priority:
-                        # Replace with new
-                        del filtered_projects[existing_path]
-                        parent_dirs[parent_dir] = project_path
-                    else:
-                        continue  # Keep existing when equal
-            else:
-                parent_dirs[parent_dir] = project_path
+                    # If existing has no markers and is a build artifact name, replace it
+                    if not existing_markers and existing_name in build_artifact_names:
+                        to_replace.append(existing_path)
+                    # Otherwise it's a valid nested project, keep both
             
-            # Only process and add projects that we're keeping (not skipped by continue)
+            # Skip if marked for skipping
+            if skip_project:
+                continue
+            
+            # Remove any projects that should be replaced
+            for path in to_replace:
+                del filtered_projects[path]
+            
+            # Process and add this project
             # Detect language properly
             markers = project_info.get('markers', [])
             if not markers and 'marker' in project_info:
@@ -1181,6 +1193,7 @@ class RemoteFileManager:
             except:
                 project_info['mtime'] = 0
             
+            # Add to filtered projects
             filtered_projects[project_path] = project_info
         
         # Sort by most recent modification time, then by name
@@ -1416,9 +1429,8 @@ class RemoteFileManager:
                                                 break
                                 
                                 if project_path:
-                                    # Skip build artifacts
-                                    if self.is_build_artifact(project_path):
-                                        continue
+                                    # Don't filter here - let process_discovered_projects handle it
+                                    # This allows us to check for markers before filtering
                                     
                                     project_name = os.path.basename(project_path)
                                     # Handle case where project is at root
@@ -1529,9 +1541,8 @@ class RemoteFileManager:
                                         break
                             
                             if project_path:
-                                # Skip build artifacts
-                                if self.is_build_artifact(project_path):
-                                    continue
+                                # Don't filter here - let process_discovered_projects handle it
+                                # This allows us to check for markers before filtering
                                 
                                 project_name = os.path.basename(project_path)
                                 # Handle case where project is at root
