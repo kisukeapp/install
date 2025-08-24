@@ -1004,6 +1004,263 @@ class RemoteFileManager:
                 'error': str(e)
             }
     
+    def is_build_artifact(self, path):
+        """Check if a path is a build artifact that should be excluded."""
+        build_artifacts = {
+            '.next', '.nuxt', 'dist', 'build', 'out', 'target',
+            'node_modules', 'vendor', '.cache', 'coverage',
+            '__pycache__', '.pytest_cache', '.tox',
+            'DerivedData', 'Build', '.build'
+        }
+        
+        path_parts = Path(path).parts
+        return any(part in build_artifacts for part in path_parts)
+    
+    def analyze_file_extensions(self, project_path, max_files=100):
+        """Analyze file extensions to determine primary language."""
+        try:
+            exclude_dirs = [
+                'node_modules', '.git', 'vendor', 'target', 
+                'build', 'dist', '.next', '.nuxt', 'out'
+            ]
+            
+            # Try ripgrep first for speed
+            try:
+                cmd = ['rg', '--files', '--max-count', str(max_files)]
+                for exclude in exclude_dirs:
+                    cmd.extend(['--glob', f'!{exclude}'])
+                cmd.append(project_path)
+                
+                result = subprocess.run(cmd, capture_output=True, text=True, 
+                                      timeout=2, check=False)
+                files = result.stdout.strip().split('\n') if result.returncode == 0 else []
+            except:
+                # Fallback to find
+                cmd = ['find', project_path, '-type', 'f']
+                for exclude in exclude_dirs:
+                    cmd.extend(['!', '-path', f'*/{exclude}/*'])
+                cmd.extend(['-print'])
+                
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=2)
+                files = result.stdout.strip().split('\n')[:max_files] if result.returncode == 0 else []
+            
+            if not files:
+                return None
+            
+            # Count extensions
+            ext_counts = {}
+            for file_path in files:
+                if not file_path:
+                    continue
+                ext = Path(file_path).suffix.lower()
+                if ext:
+                    ext_counts[ext] = ext_counts.get(ext, 0) + 1
+            
+            # Map extensions to languages
+            ext_to_lang = {
+                '.js': 'node', '.jsx': 'node', '.ts': 'node', '.tsx': 'node', '.mjs': 'node',
+                '.py': 'python', '.pyx': 'python', '.pyi': 'python',
+                '.rs': 'rust',
+                '.go': 'go',
+                '.swift': 'swift', '.m': 'swift', '.mm': 'swift',
+                '.rb': 'ruby', '.erb': 'ruby',
+                '.java': 'java', '.kt': 'java',
+                '.php': 'php',
+                '.dart': 'dart',
+                '.c': 'c', '.cpp': 'cpp', '.cc': 'cpp', '.cxx': 'cpp', '.h': 'c',
+                '.cs': 'csharp',
+                '.r': 'r', '.R': 'r',
+                '.scala': 'scala',
+                '.ex': 'elixir', '.exs': 'elixir',
+            }
+            
+            # Calculate language scores
+            lang_scores = {}
+            total_files = sum(ext_counts.values())
+            
+            for ext, count in ext_counts.items():
+                if ext in ext_to_lang:
+                    lang = ext_to_lang[ext]
+                    lang_scores[lang] = lang_scores.get(lang, 0) + count
+            
+            if not lang_scores:
+                return None
+            
+            # Get the predominant language
+            main_lang = max(lang_scores, key=lang_scores.get)
+            confidence = (lang_scores[main_lang] / total_files) * 100
+            
+            # Only return if we have reasonable confidence
+            if confidence > 30:
+                return (main_lang, confidence, f'{main_lang} files')
+            
+            return None
+            
+        except Exception:
+            return None
+    
+    def process_discovered_projects(self, discovered, max_results):
+        """Post-process discovered projects to filter and detect languages.
+        
+        Args:
+            discovered: Dictionary of discovered projects
+            max_results: Maximum number of results to return
+            
+        Returns:
+            List of processed and filtered projects
+        """
+        filtered_projects = {}
+        parent_dirs = {}  # Track parent directories to avoid duplicates like .next
+        
+        for project_path, project_info in discovered.items():
+            # Skip build artifacts (double-check)
+            if self.is_build_artifact(project_path):
+                continue
+            
+            # Get parent directory
+            parent_dir = os.path.dirname(project_path)
+            
+            # If we already have a project in the same parent directory,
+            # keep the one that's more likely to be the real project
+            if parent_dir in parent_dirs:
+                existing_path = parent_dirs[parent_dir]
+                existing_info = filtered_projects.get(existing_path, {})
+                
+                # Prefer non-dot directories over dot directories
+                existing_is_dot = os.path.basename(existing_path).startswith('.')
+                new_is_dot = os.path.basename(project_path).startswith('.')
+                
+                if new_is_dot and not existing_is_dot:
+                    # Keep existing, skip new
+                    continue
+                elif existing_is_dot and not new_is_dot:
+                    # Replace existing with new
+                    del filtered_projects[existing_path]
+                    parent_dirs[parent_dir] = project_path
+                else:
+                    # Both are similar, keep the one with higher priority markers
+                    existing_markers = existing_info.get('markers', [])
+                    new_markers = project_info.get('markers', [])
+                    
+                    # Check for priority markers
+                    priority_markers = ['package.json', 'Cargo.toml', 'go.mod', 'Package.swift']
+                    existing_has_priority = any(m in priority_markers for m in existing_markers)
+                    new_has_priority = any(m in priority_markers for m in new_markers)
+                    
+                    if existing_has_priority and not new_has_priority:
+                        continue  # Keep existing
+                    elif new_has_priority and not existing_has_priority:
+                        # Replace with new
+                        del filtered_projects[existing_path]
+                        parent_dirs[parent_dir] = project_path
+                    else:
+                        continue  # Keep existing when equal
+            else:
+                parent_dirs[parent_dir] = project_path
+            
+            # Detect language properly
+            markers = project_info.get('markers', [])
+            if not markers and 'marker' in project_info:
+                markers = [project_info['marker']]
+            
+            lang_type, confidence, primary_marker = self.detect_project_language(
+                project_path, markers
+            )
+            
+            # Update project info with proper language
+            project_info['type'] = lang_type
+            project_info['confidence'] = confidence
+            project_info['primary_marker'] = primary_marker
+            
+            # Get modification time for sorting
+            try:
+                stat_info = os.stat(project_path)
+                project_info['mtime'] = stat_info.st_mtime
+            except:
+                project_info['mtime'] = 0
+            
+            filtered_projects[project_path] = project_info
+        
+        # Sort by most recent modification time, then by name
+        projects = sorted(
+            filtered_projects.values(),
+            key=lambda x: (-x.get('mtime', 0), x['name'].lower())
+        )
+        
+        # Remove mtime from output (it was just for sorting)
+        for proj in projects:
+            proj.pop('mtime', None)
+        
+        # Limit results
+        return projects[:max_results]
+    
+    def detect_project_language(self, project_path, markers_found):
+        """Detect the primary language of a project based on file markers."""
+        
+        # Priority-based language detection
+        language_priorities = {
+            # Priority 1: Package managers (definitive)
+            'package.json': ('node', 100, 'package.json'),
+            'Cargo.toml': ('rust', 100, 'Cargo.toml'),
+            'go.mod': ('go', 100, 'go.mod'),
+            'Package.swift': ('swift', 100, 'Package.swift'),
+            'requirements.txt': ('python', 90, 'requirements.txt'),
+            'pyproject.toml': ('python', 95, 'pyproject.toml'),
+            'setup.py': ('python', 95, 'setup.py'),
+            'Gemfile': ('ruby', 100, 'Gemfile'),
+            'build.gradle': ('java', 95, 'build.gradle'),
+            'pom.xml': ('java', 95, 'pom.xml'),
+            'composer.json': ('php', 100, 'composer.json'),
+            'pubspec.yaml': ('dart', 100, 'pubspec.yaml'),
+            
+            # Priority 2: Build systems
+            '.xcworkspace': ('swift', 95, 'Xcode Workspace'),
+            '.xcodeproj': ('swift', 90, 'Xcode Project'),
+            'Makefile': ('make', 70, 'Makefile'),
+            'CMakeLists.txt': ('cmake', 75, 'CMakeLists.txt'),
+            
+            # Priority 3: Environment/config
+            'docker-compose.yml': ('docker', 80, 'docker-compose.yml'),
+            'Dockerfile': ('docker', 75, 'Dockerfile'),
+            '.venv': ('python', 70, 'Python venv'),
+            'venv': ('python', 70, 'Python venv'),
+        }
+        
+        # Check markers in priority order
+        best_match = None
+        best_score = 0
+        
+        for marker in markers_found:
+            if marker in language_priorities:
+                lang, score, display_marker = language_priorities[marker]
+                if score > best_score:
+                    best_match = (lang, score, display_marker)
+                    best_score = score
+        
+        # If we have a high-confidence match, return it
+        if best_match and best_score >= 90:
+            return best_match
+        
+        # For git repos or low-confidence matches, analyze file extensions
+        if '.git' in markers_found or best_score < 90:
+            lang_from_files = self.analyze_file_extensions(project_path)
+            if lang_from_files:
+                # If we have a match from markers, combine confidence
+                if best_match:
+                    # Average the confidence scores
+                    combined_score = (best_score + lang_from_files[1]) / 2
+                    # Prefer the marker-based detection if languages match
+                    if best_match[0] == lang_from_files[0]:
+                        return (best_match[0], combined_score, best_match[2])
+                    # Otherwise, use file analysis if it's more confident
+                    elif lang_from_files[1] > best_score:
+                        return lang_from_files
+                else:
+                    return lang_from_files
+        
+        # Return best match or unknown
+        return best_match if best_match else ('unknown', 0, 'folder')
+    
     def scan_projects(self, paths=None, max_depth=3, max_results=500, 
                      follow_symlinks=False, use_ripgrep=True):
         """Ultra-fast project discovery using ripgrep or find.
@@ -1156,18 +1413,29 @@ class RemoteFileManager:
                                                 marker_found = marker
                                                 break
                                 
-                                if project_path and project_path not in discovered:
+                                if project_path:
+                                    # Skip build artifacts
+                                    if self.is_build_artifact(project_path):
+                                        continue
+                                    
                                     project_name = os.path.basename(project_path)
                                     # Handle case where project is at root
                                     if not project_name:
                                         project_name = os.path.basename(os.path.dirname(project_path))
                                     
-                                    discovered[project_path] = {
-                                        'name': project_name,
-                                        'path': project_path,
-                                        'type': project_type,
-                                        'marker': marker_found
-                                    }
+                                    # If project already discovered, add to its markers
+                                    if project_path in discovered:
+                                        if marker_found not in discovered[project_path].get('markers', []):
+                                            discovered[project_path]['markers'].append(marker_found)
+                                    else:
+                                        # New project discovery
+                                        discovered[project_path] = {
+                                            'name': project_name,
+                                            'path': project_path,
+                                            'type': project_type,  # Will be updated later
+                                            'marker': marker_found,
+                                            'markers': [marker_found]
+                                        }
                                     
                                     if len(discovered) >= max_results:
                                         break
@@ -1178,12 +1446,13 @@ class RemoteFileManager:
                         if len(discovered) >= max_results:
                             break
                     
-                    # If ripgrep succeeded
+                    # If ripgrep succeeded, process results
                     if discovered:
+                        projects = self.process_discovered_projects(discovered, max_results)
                         return {
                             'success': True,
-                            'projects': list(discovered.values()),
-                            'total': len(discovered),
+                            'projects': projects,
+                            'total': len(projects),
                             'scan_method': 'ripgrep'
                         }
                     
@@ -1257,18 +1526,29 @@ class RemoteFileManager:
                                         marker_found = marker
                                         break
                             
-                            if project_path and project_path not in discovered:
+                            if project_path:
+                                # Skip build artifacts
+                                if self.is_build_artifact(project_path):
+                                    continue
+                                
                                 project_name = os.path.basename(project_path)
                                 # Handle case where project is at root
                                 if not project_name:
                                     project_name = os.path.basename(os.path.dirname(project_path))
                                     
-                                discovered[project_path] = {
-                                    'name': project_name,
-                                    'path': project_path,
-                                    'type': project_type,
-                                    'marker': marker_found
-                                }
+                                # If project already discovered, add to its markers
+                                if project_path in discovered:
+                                    if marker_found not in discovered[project_path].get('markers', []):
+                                        discovered[project_path]['markers'].append(marker_found)
+                                else:
+                                    # New project discovery
+                                    discovered[project_path] = {
+                                        'name': project_name,
+                                        'path': project_path,
+                                        'type': project_type,  # Will be updated later
+                                        'marker': marker_found,
+                                        'markers': [marker_found]
+                                    }
                                 
                                 if len(discovered) >= max_results:
                                     break
@@ -1288,8 +1568,8 @@ class RemoteFileManager:
                             'error': 'Scan timeout - filesystem too large'
                         }
             
-            # Sort projects by name
-            projects = sorted(discovered.values(), key=lambda x: x['name'].lower())
+            # Post-process discovered projects
+            projects = self.process_discovered_projects(discovered, max_results)
             
             return {
                 'success': True,
