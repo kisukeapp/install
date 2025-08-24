@@ -141,9 +141,7 @@ detect_platform() {
             exit 1
             ;;
     esac
-    # Report system info for mobile app
-    [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] OK SYSTEM_INFO OS=$OS ARCH=$ARCH"
-    [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] OK PLATFORM_COMPAT true"
+    # System info will be reported by show_status() to avoid duplication
     
     # Detect distro for Alpine/musl handling
     DISTRO=""
@@ -809,7 +807,7 @@ show_status() {
                 log ERROR "SYS_PACKAGE $pkg PACKAGE_NOT_INSTALLED"
             fi
         done
-        local all_installed=false
+        local all_installed=true
         for pkg in jq ripgrep nodejs python3; do
             local ver expected status
             if ! ver=$(get_version "$pkg" local); then
