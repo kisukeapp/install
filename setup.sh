@@ -234,7 +234,7 @@ get_version() {
             ;;
         tmux) 
             # On macOS, check brew first if available
-            if [[ "$OS_NAME" == "mac" && -n "$BREW_CMD" ]] && $BREW_CMD list tmux >/dev/null 2>&1; then
+            if [[ "$OS" == "mac" && -n "$BREW_CMD" ]] && $BREW_CMD list tmux >/dev/null 2>&1; then
                 # Use brew's tmux path
                 local tmux_path="${BREW_CMD%/brew}/tmux"
                 if [[ -x "$tmux_path" ]]; then
