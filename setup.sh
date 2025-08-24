@@ -233,7 +233,15 @@ get_version() {
             fi
             ;;
         tmux) 
-            if command -v tmux >/dev/null 2>&1; then
+            # On macOS, check brew first if available
+            if [[ "$OS_NAME" == "mac" && -n "$BREW_CMD" ]] && $BREW_CMD list tmux >/dev/null 2>&1; then
+                # Use brew's tmux path
+                local tmux_path="${BREW_CMD%/brew}/tmux"
+                if [[ -x "$tmux_path" ]]; then
+                    ver=$($tmux_path -V 2>/dev/null | awk '{print $2}' || echo "unknown")
+                    [[ -z "$ver" ]] && ver="unknown"
+                fi
+            elif command -v tmux >/dev/null 2>&1; then
                 ver=$(tmux -V 2>/dev/null | awk '{print $2}' || echo "unknown")
                 [[ -z "$ver" ]] && ver="unknown"
             fi
@@ -300,22 +308,6 @@ format_status() {
     else
         echo "installed (v$current)${type:+ - not managed by script}"
     fi
-}
-
-check_claude_auth() {
-    local credentials_file="$HOME/.claude/.credentials.json"
-    
-    # Check if credentials file exists
-    if [[ ! -f "$credentials_file" ]]; then
-        return 1  # Not authenticated
-    fi
-    
-    # Check if file has valid content (contains accessToken or access_token)
-    if grep -q -E '(accessToken|access_token)' "$credentials_file" 2>/dev/null; then
-        return 0  # Authenticated
-    fi
-    
-    return 1  # Not authenticated
 }
 
 create_symlinks() {
@@ -854,12 +846,6 @@ show_status() {
             [[ "$CLAUDE_SDK_VER" == "unknown" ]] && log ERROR "CLAUDE_TOOL SDK not_installed" || log OK "CLAUDE_TOOL SDK v$CLAUDE_SDK_VER"
             [[ "$CLAUDE_CLI_VER" == "unknown" ]] && log ERROR "CLAUDE_TOOL CLI not_installed" || log OK "CLAUDE_TOOL CLI v$CLAUDE_CLI_VER"
         fi
-        
-        if check_claude_auth; then
-            log OK "CLAUDE_AUTH authenticated"
-        else
-            log ERROR "CLAUDE_AUTH not_authenticated"
-        fi
     else
         log OK "System Information:"
         echo "  OS: $OS"
@@ -941,14 +927,6 @@ show_status() {
         echo "  SDK: $(format_status claude_sdk "$SDK_VER" "$expected_sdk")"
         echo "  CLI: $(format_status claude_cli "$CLI_VER" "$expected_cli")"
         
-        if check_claude_auth; then
-            echo "  Authentication: ✓ authenticated"
-        else
-            echo "  Authentication: ✗ not authenticated"
-            echo
-            echo "To authenticate Claude CLI:"
-            echo "  claude auth login"
-        fi
         
         cat <<EOF
 
