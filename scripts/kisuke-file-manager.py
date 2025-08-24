@@ -1130,9 +1130,9 @@ class RemoteFileManager:
             if not project_markers and 'marker' in project_info:
                 project_markers = [project_info['marker']]
             
-            # Skip if it's a build artifact WITHOUT any project markers
-            # This allows a folder named "build" with a package.json to be kept
-            if project_name in build_artifact_names and not project_markers:
+            # Skip if it's a build artifact folder
+            # Always skip these folders to prevent them from appearing as separate projects
+            if project_name in build_artifact_names:
                 continue
             
             # Check relationships with already processed projects
@@ -1146,8 +1146,9 @@ class RemoteFileManager:
                 # Check if new project is inside an existing project
                 if project_path.startswith(existing_path_normalized + os.sep):
                     # New is inside existing
-                    # Only skip if it has no markers AND is a build artifact name
-                    if not project_markers and project_name in build_artifact_names:
+                    # Skip if it's a build artifact name (already filtered above)
+                    # This is redundant now but kept for clarity
+                    if project_name in build_artifact_names:
                         skip_project = True
                         break
                     # Otherwise it's a valid nested project (like monorepo package), keep it
@@ -1155,11 +1156,11 @@ class RemoteFileManager:
                 # Check if existing project is inside the new project
                 elif existing_path_normalized.startswith(project_path + os.sep):
                     # Existing is inside new
-                    existing_markers = existing_info.get('markers', [])
                     existing_name = os.path.basename(existing_path_normalized)
                     
-                    # If existing has no markers and is a build artifact name, replace it
-                    if not existing_markers and existing_name in build_artifact_names:
+                    # If existing is a build artifact name, it should have been filtered already
+                    # but double-check and mark for replacement if somehow it got through
+                    if existing_name in build_artifact_names:
                         to_replace.append(existing_path)
                     # Otherwise it's a valid nested project, keep both
             
@@ -1429,13 +1430,18 @@ class RemoteFileManager:
                                                 break
                                 
                                 if project_path:
-                                    # Don't filter here - let process_discovered_projects handle it
-                                    # This allows us to check for markers before filtering
-                                    
                                     project_name = os.path.basename(project_path)
                                     # Handle case where project is at root
                                     if not project_name:
                                         project_name = os.path.basename(os.path.dirname(project_path))
+                                    
+                                    # Early filtering: Skip build artifact folders entirely
+                                    build_artifacts = {'.next', '.nuxt', 'dist', 'build', 'out', 'target', 
+                                                     'node_modules', 'vendor', '.cache', 'coverage',
+                                                     '__pycache__', '.pytest_cache', '.tox',
+                                                     'DerivedData', 'Build', '.build'}
+                                    if project_name in build_artifacts:
+                                        continue
                                     
                                     # If project already discovered, add to its markers
                                     if project_path in discovered:
@@ -1541,13 +1547,18 @@ class RemoteFileManager:
                                         break
                             
                             if project_path:
-                                # Don't filter here - let process_discovered_projects handle it
-                                # This allows us to check for markers before filtering
-                                
                                 project_name = os.path.basename(project_path)
                                 # Handle case where project is at root
                                 if not project_name:
                                     project_name = os.path.basename(os.path.dirname(project_path))
+                                
+                                # Early filtering: Skip build artifact folders entirely
+                                build_artifacts = {'.next', '.nuxt', 'dist', 'build', 'out', 'target', 
+                                                 'node_modules', 'vendor', '.cache', 'coverage',
+                                                 '__pycache__', '.pytest_cache', '.tox',
+                                                 'DerivedData', 'Build', '.build'}
+                                if project_name in build_artifacts:
+                                    continue
                                     
                                 # If project already discovered, add to its markers
                                 if project_path in discovered:
