@@ -37,7 +37,10 @@ get_pkg_manager_cmd() {
         zypper) echo "zypper install -y" ;;
         portage) echo "emerge --ask=n" ;;
         xbps) echo "xbps-install -S" ;;
-        brew) echo "brew install" ;;
+        brew) 
+            # Use the full path if available, otherwise just "brew"
+            [[ -n "$BREW_CMD" ]] && echo "$BREW_CMD install" || echo "brew install"
+            ;;
         *) echo "" ;;
     esac
 }
@@ -59,6 +62,7 @@ mkdir -p "$BIN_DIR" "$INSTALL_MARKER_DIR" "$CACHE_DIR" "$SCRIPTS_DIR" || {
 MOBILE_APP=0 INSTALL=0 UNINSTALL=0 DEPLOY=0
 DISTRO=""  # Will be set by detect_platform()
 INSTALL_PACKAGES=() UNINSTALL_PACKAGES=()
+BREW_CMD=""  # Will store the full path to brew command
 
 [[ ":$PATH:" != *":$BIN_DIR:"* ]] && export PATH="$BIN_DIR:$PATH"
 [[ ":$PATH:" != *":$NODEJS_BIN_DIR:"* ]] && export PATH="$NODEJS_BIN_DIR:$PATH"
@@ -152,9 +156,30 @@ detect_platform() {
 
 
 detect_package_manager() {
+    # Special handling for macOS Homebrew - check standard locations first
+    if [[ "$OS" == "mac" ]]; then
+        # Check Apple Silicon location first (most common for new Macs)
+        if [[ -x "/opt/homebrew/bin/brew" ]]; then
+            PKG_MGR="brew"
+            BREW_CMD="/opt/homebrew/bin/brew"
+            return 0
+        # Check Intel Mac location
+        elif [[ -x "/usr/local/bin/brew" ]]; then
+            PKG_MGR="brew"
+            BREW_CMD="/usr/local/bin/brew"
+            return 0
+        fi
+    fi
+    
+    # Original detection for all systems (including brew in PATH)
     for entry in brew:brew apk:apk apt-get:apt dnf:dnf yum:yum pacman:pacman zypper:zypper emerge:portage xbps-install:xbps; do
         cmd=${entry%%:*}; name=${entry##*:}
-        if command -v "$cmd" >/dev/null 2>&1; then PKG_MGR="$name"; return 0; fi
+        if command -v "$cmd" >/dev/null 2>&1; then 
+            PKG_MGR="$name"
+            # Store brew path if found
+            [[ "$name" == "brew" ]] && BREW_CMD="$cmd"
+            return 0
+        fi
     done
     PKG_MGR="unknown"
     # Return 0 to prevent script exit under set -e
