@@ -1013,8 +1013,9 @@ class RemoteFileManager:
             'DerivedData', 'Build', '.build'
         }
         
-        path_parts = Path(path).parts
-        return any(part in build_artifacts for part in path_parts)
+        # Only check the project directory name itself, not the entire path
+        project_name = os.path.basename(path.rstrip('/'))
+        return project_name in build_artifacts
     
     def analyze_file_extensions(self, project_path, max_files=100):
         """Analyze file extensions to determine primary language."""
@@ -1143,7 +1144,7 @@ class RemoteFileManager:
                     new_markers = project_info.get('markers', [])
                     
                     # Check for priority markers
-                    priority_markers = ['package.json', 'Cargo.toml', 'go.mod', 'Package.swift']
+                    priority_markers = ['package.json', 'Cargo.toml', 'go.mod', 'Package.Swift']
                     existing_has_priority = any(m in priority_markers for m in existing_markers)
                     new_has_priority = any(m in priority_markers for m in new_markers)
                     
@@ -1158,6 +1159,7 @@ class RemoteFileManager:
             else:
                 parent_dirs[parent_dir] = project_path
             
+            # Only process and add projects that we're keeping (not skipped by continue)
             # Detect language properly
             markers = project_info.get('markers', [])
             if not markers and 'marker' in project_info:
