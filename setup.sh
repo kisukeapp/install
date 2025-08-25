@@ -452,12 +452,50 @@ verify_installation() {
     esac
 }
 
+create_system_symlinks() {
+    local pkg="$1"
+    case "$pkg" in
+        git|tmux)
+            if [[ -L "$BIN_DIR/$pkg" ]]; then
+                rm -f "$BIN_DIR/$pkg"
+                log NOTIFY "Removed existing symlink: $pkg"
+            fi
+            if command -v "$pkg" >/dev/null 2>&1; then
+                local system_path
+                if system_path=$(command -v "$pkg" 2>/dev/null); then
+                    if ln -sf "$system_path" "$BIN_DIR/$pkg"; then
+                        log NOTIFY "Created symlink: $pkg -> $system_path"
+                        return 0
+                    else
+                        log ERROR "Failed to create symlink: $pkg -> $system_path"
+                        return 1
+                    fi
+                fi
+            fi
+            ;;
+    esac
+    return 0
+}
+
+remove_system_symlinks() {
+    local pkg="$1"
+    case "$pkg" in
+        git|tmux)
+            if [[ -L "$BIN_DIR/$pkg" ]]; then
+                rm -f "$BIN_DIR/$pkg"
+                log NOTIFY "Removed system symlink: $pkg"
+            fi
+            ;;
+    esac
+}
+
 install_system_package() {
     local pkg="$1" pkg_name="$1"
-    
+    remove_system_symlinks "$pkg"
     # Check if already installed first
     if command -v "$pkg" >/dev/null 2>&1; then
-        return 0  # Already installed, success
+        create_system_symlinks "$pkg"
+        return 0
     fi
     
     [[ "$pkg" == "git"  && "$PKG_MGR" == "portage" ]] && pkg_name="dev-vcs/git"
@@ -469,11 +507,9 @@ install_system_package() {
     fi
     
     local sudo_cmd=""
-    # In app mode, ALWAYS use sudo (except for brew)
     if [[ $MOBILE_APP -eq 1 ]]; then
         [[ "$PKG_MGR" != "brew" ]] && sudo_cmd="sudo"
     else
-        # Normal mode - only use sudo if not root
         [[ $(id -u) -ne 0 && "$PKG_MGR" != "brew" ]] && sudo_cmd="sudo"
     fi
     
@@ -482,14 +518,13 @@ install_system_package() {
         log ERROR "Failed to get package manager command"
         return 1
     fi
-    
-    # Remove silent output redirection to see errors
     if eval "$sudo_cmd $pkg_cmd $pkg_name"; then
         local ver
         if ! ver=$(get_version "$pkg"); then
             ver="unknown"
         fi
         cache_set "$pkg" "$ver"
+        create_system_symlinks "$pkg"
         return 0
     fi
     
@@ -562,11 +597,7 @@ install_ripgrep() {
     local archive_name binary_name
     case "$OS-$ARCH" in
         linux-x86_64) 
-            if [[ "$DISTRO" == "alpine" ]]; then
-                archive_name="ripgrep-${expected_ver}-x86_64-unknown-linux-musl.tar.gz"
-            else
-                archive_name="ripgrep-${expected_ver}-x86_64-unknown-linux-gnu.tar.gz"
-            fi
+            archive_name="ripgrep-${expected_ver}-x86_64-unknown-linux-musl.tar.gz"
             binary_name="rg"
             ;;
         linux-arm64) 
@@ -777,6 +808,7 @@ install_claude_tools() {
     return $((sdk_status + cli_status))
 }
 
+# Complete show_status function with system package symlink support
 show_status() {
     if [[ $MOBILE_APP -eq 1 ]]; then
         log OK "SYSTEM_INFO OS=$OS ARCH=$ARCH"
@@ -905,6 +937,25 @@ show_status() {
                 echo "  $binary (direct)"
             fi
         done
+
+        echo
+        log NOTIFY "System package symlinks in PATH ($BIN_DIR):"
+        for pkg in git tmux; do
+            if [[ -L "$BIN_DIR/$pkg" ]]; then
+                local target
+                if ! target=$(readlink "$BIN_DIR/$pkg" 2>/dev/null); then
+                    target="[error reading link]"
+                fi
+                echo "  $pkg -> $target"
+            elif command -v "$pkg" >/dev/null 2>&1; then
+                local system_path
+                if system_path=$(command -v "$pkg" 2>/dev/null); then
+                    echo "  $pkg (system: $system_path, no symlink)"
+                fi
+            else
+                echo "  $pkg (not installed)"
+            fi
+        done
         echo
         local SDK_VER CLI_VER
         if ! SDK_VER=$(get_version claude_sdk); then
@@ -960,7 +1011,7 @@ handle_install() {
         
         case "$pkg" in
             git|tmux)
-                # Check if already installed to avoid unnecessary sudo
+                remove_system_symlinks "$pkg"
                 if command -v "$pkg" >/dev/null 2>&1; then
                     local ver
                     if ! ver=$(get_version "$pkg"); then
@@ -968,6 +1019,7 @@ handle_install() {
                     fi
                     log OK "$pkg already installed (v$ver)"
                     [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] OK LOCAL_BIN $pkg already installed"
+                    create_system_symlinks "$pkg"
                 else
                     # Not installed - attempt installation
                     if install_system_package "$pkg"; then
@@ -1370,8 +1422,9 @@ handle_uninstall() {
         local pkg_lower=$(printf "%s" "$pkg" | tr '[:upper:]' '[:lower:]')
         case "$pkg_lower" in
             git|tmux)
-                log NOTIFY "$pkg is not managed by this script"
+                remove_system_symlinks "$pkg"
                 cache_remove "$pkg"
+                log NOTIFY "$pkg symlink removed (system package not uninstalled)"
                 ;;
             jq)
                 if [[ -x "$BIN_DIR/jq" ]]; then
