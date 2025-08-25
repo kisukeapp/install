@@ -1210,6 +1210,144 @@ class RemoteFileManager:
         # Limit results
         return projects[:max_results]
     
+    def detect_python_framework(self, project_path):
+        """Detect specific Python framework."""
+        try:
+            # Check for framework-specific files
+            framework_markers = {
+                'manage.py': 'django',
+                'settings.py': 'django',
+                'wsgi.py': 'django',
+                'main.py': 'fastapi',  # Common for FastAPI
+                'app.py': 'python',  # Could be Flask or generic
+                'flask_app.py': 'python',
+            }
+            
+            # Check for framework markers
+            for marker, framework in framework_markers.items():
+                marker_path = os.path.join(project_path, marker)
+                if os.path.exists(marker_path):
+                    # For main.py, check if it contains FastAPI imports
+                    if marker == 'main.py':
+                        try:
+                            with open(marker_path, 'r') as f:
+                                content = f.read(1000)  # Read first 1000 chars
+                                if 'fastapi' in content.lower() or 'FastAPI' in content:
+                                    return 'fastapi'
+                        except:
+                            pass
+                    else:
+                        return framework
+            
+            # Check requirements.txt for framework packages
+            req_path = os.path.join(project_path, 'requirements.txt')
+            if os.path.exists(req_path):
+                try:
+                    with open(req_path, 'r') as f:
+                        requirements = f.read().lower()
+                    
+                    if 'django' in requirements:
+                        return 'django'
+                    elif 'fastapi' in requirements:
+                        return 'fastapi'
+                    elif 'flask' in requirements:
+                        return 'python'  # We don't have a flask icon
+                except:
+                    pass
+            
+            # Check Pipfile if exists
+            pipfile_path = os.path.join(project_path, 'Pipfile')
+            if os.path.exists(pipfile_path):
+                try:
+                    with open(pipfile_path, 'r') as f:
+                        pipfile = f.read().lower()
+                    
+                    if 'django' in pipfile:
+                        return 'django'
+                    elif 'fastapi' in pipfile:
+                        return 'fastapi'
+                except:
+                    pass
+            
+            return 'python'
+        except:
+            return 'python'
+    
+    def detect_js_framework(self, project_path):
+        """Detect specific JavaScript framework for Node.js projects."""
+        try:
+            # Check for framework-specific config files
+            framework_markers = {
+                'next.config.js': 'nextjs',
+                'next.config.mjs': 'nextjs',
+                'next.config.ts': 'nextjs',
+                # '.next' removed - it's a build artifact
+                'nuxt.config.js': 'vue',
+                'nuxt.config.ts': 'vue',
+                '.nuxt': 'vue',
+                'vite.config.js': 'react',  # Often React but could be Vue/Svelte
+                'vite.config.ts': 'react',
+                'angular.json': 'angular',
+                '.angular': 'angular',
+                'svelte.config.js': 'svelte',
+                'gatsby-config.js': 'react',
+                'vue.config.js': 'vue',
+            }
+            
+            # Check for framework markers
+            for marker, framework in framework_markers.items():
+                marker_path = os.path.join(project_path, marker)
+                if os.path.exists(marker_path):
+                    return framework
+            
+            # Additional Next.js detection - check for Next.js directory structure
+            if os.path.exists(os.path.join(project_path, 'pages')) or \
+               os.path.exists(os.path.join(project_path, 'app')):
+                # Check if it's likely a Next.js project (has pages/_app or app/layout)
+                if os.path.exists(os.path.join(project_path, 'pages', '_app.js')) or \
+                   os.path.exists(os.path.join(project_path, 'pages', '_app.jsx')) or \
+                   os.path.exists(os.path.join(project_path, 'pages', '_app.ts')) or \
+                   os.path.exists(os.path.join(project_path, 'pages', '_app.tsx')) or \
+                   os.path.exists(os.path.join(project_path, 'app', 'layout.js')) or \
+                   os.path.exists(os.path.join(project_path, 'app', 'layout.jsx')) or \
+                   os.path.exists(os.path.join(project_path, 'app', 'layout.ts')) or \
+                   os.path.exists(os.path.join(project_path, 'app', 'layout.tsx')):
+                    return 'nextjs'
+            
+            # If no specific framework found, check package.json for dependencies
+            package_json_path = os.path.join(project_path, 'package.json')
+            if os.path.exists(package_json_path):
+                try:
+                    with open(package_json_path, 'r') as f:
+                        package_data = json.loads(f.read())
+                    
+                    deps = {}
+                    if 'dependencies' in package_data:
+                        deps.update(package_data['dependencies'])
+                    if 'devDependencies' in package_data:
+                        deps.update(package_data['devDependencies'])
+                    
+                    # Check for framework packages
+                    if 'next' in deps:
+                        return 'nextjs'
+                    elif '@angular/core' in deps:
+                        return 'angular'
+                    elif 'vue' in deps or '@vue/cli-service' in deps:
+                        return 'vue'
+                    elif 'svelte' in deps:
+                        return 'svelte'
+                    elif 'react' in deps:
+                        return 'react'
+                    elif '@types/node' in deps or 'typescript' in deps:
+                        return 'typescript'
+                except:
+                    pass
+            
+            # Default to nodejs if no specific framework detected
+            return 'nodejs'
+        except:
+            return 'nodejs'
+    
     def detect_project_language(self, project_path, markers_found):
         """Detect the primary language of a project based on file markers."""
         
@@ -1253,8 +1391,38 @@ class RemoteFileManager:
                     best_match = (lang, score, display_marker)
                     best_score = score
         
-        # If we have a high-confidence match, return it
+        # If we have a high-confidence match, check for specific frameworks
         if best_match and best_score >= 90:
+            lang, score, display_marker = best_match
+            
+            # For Git repos, check if it's actually a framework project
+            if lang == 'git':
+                # Check for Node.js project
+                if os.path.exists(os.path.join(project_path, 'package.json')):
+                    framework = self.detect_js_framework(project_path)
+                    return (framework, score, 'Git + ' + framework)
+                # Check for Python project
+                elif any(os.path.exists(os.path.join(project_path, m)) 
+                        for m in ['requirements.txt', 'setup.py', 'pyproject.toml', 'Pipfile']):
+                    framework = self.detect_python_framework(project_path)
+                    return (framework, score, 'Git + ' + framework)
+                # Check for other language markers
+                elif os.path.exists(os.path.join(project_path, 'Cargo.toml')):
+                    return ('rust', score, 'Git + Rust')
+                elif os.path.exists(os.path.join(project_path, 'go.mod')):
+                    return ('go', score, 'Git + Go')
+                elif os.path.exists(os.path.join(project_path, 'Gemfile')):
+                    return ('ruby', score, 'Git + Ruby')
+                elif os.path.exists(os.path.join(project_path, 'Package.swift')):
+                    return ('swift', score, 'Git + Swift')
+            # For Node.js projects, detect specific framework
+            elif lang == 'node':
+                framework = self.detect_js_framework(project_path)
+                return (framework, score, display_marker)
+            # For Python projects, detect specific framework
+            elif lang == 'python':
+                framework = self.detect_python_framework(project_path)
+                return (framework, score, display_marker)
             return best_match
         
         # For git repos or low-confidence matches, analyze file extensions
@@ -1267,11 +1435,36 @@ class RemoteFileManager:
                     combined_score = (best_score + lang_from_files[1]) / 2
                     # Prefer the marker-based detection if languages match
                     if best_match[0] == lang_from_files[0]:
-                        return (best_match[0], combined_score, best_match[2])
+                        final_lang = best_match[0]
+                        # For Node.js projects, detect specific framework
+                        if final_lang == 'node':
+                            final_lang = self.detect_js_framework(project_path)
+                        # For Python projects, detect specific framework
+                        elif final_lang == 'python':
+                            final_lang = self.detect_python_framework(project_path)
+                        return (final_lang, combined_score, best_match[2])
                     # Otherwise, use file analysis if it's more confident
                     elif lang_from_files[1] > best_score:
+                        final_lang = lang_from_files[0]
+                        # For Node.js projects, detect specific framework
+                        if final_lang == 'node':
+                            final_lang = self.detect_js_framework(project_path)
+                            return (final_lang, lang_from_files[1], lang_from_files[2])
+                        # For Python projects, detect specific framework
+                        elif final_lang == 'python':
+                            final_lang = self.detect_python_framework(project_path)
+                            return (final_lang, lang_from_files[1], lang_from_files[2])
                         return lang_from_files
                 else:
+                    final_lang = lang_from_files[0]
+                    # For Node.js projects, detect specific framework
+                    if final_lang == 'node':
+                        final_lang = self.detect_js_framework(project_path)
+                        return (final_lang, lang_from_files[1], lang_from_files[2])
+                    # For Python projects, detect specific framework
+                    elif final_lang == 'python':
+                        final_lang = self.detect_python_framework(project_path)
+                        return (final_lang, lang_from_files[1], lang_from_files[2])
                     return lang_from_files
         
         # Return best match or unknown
