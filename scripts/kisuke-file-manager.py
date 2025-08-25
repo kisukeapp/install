@@ -1283,14 +1283,11 @@ class RemoteFileManager:
             if not markers and 'marker' in project_info:
                 markers = [project_info['marker']]
             
-            lang_type, confidence, primary_marker = self.detect_project_language(
-                project_path, markers
-            )
+            lang_type = self.detect_project_language(markers)
             
             # Update project info with proper language
             project_info['type'] = lang_type
-            project_info['confidence'] = confidence
-            project_info['primary_marker'] = primary_marker
+            project_info['primary_marker'] = markers[0] if markers else 'unknown'
             
             # Get modification time for sorting
             try:
@@ -1453,127 +1450,171 @@ class RemoteFileManager:
         except:
             return 'nodejs'
     
-    def detect_project_language(self, project_path, markers_found):
-        """Detect the primary language of a project based on file markers."""
+    def detect_project_language(self, markers):
+        """Fast language detection based solely on marker files.
         
-        # Priority-based language detection
-        language_priorities = {
-            # Priority 1: Package managers (definitive)
-            'package.json': ('node', 100, 'package.json'),
+        This is much faster than reading files - just uses the markers
+        we already found during scanning.
+        
+        Args:
+            markers: List of marker files found in the project
+            
+        Returns:
+            Tuple of (language_type, confidence, primary_marker)
+        """
+        if not markers:
+            return ('unknown', 0, 'folder')
+        
+        # Priority-based marker detection
+        # Higher priority markers override lower ones
+        marker_priority = {
+            # NextJS - highest priority for JS projects
+            'next.config.js': ('nextjs', 100, 'next.config.js'),
+            'next.config.ts': ('nextjs', 100, 'next.config.ts'),
+            'next.config.mjs': ('nextjs', 100, 'next.config.mjs'),
+            
+            # Other JS frameworks
+            'angular.json': ('angular', 100, 'angular.json'),
+            'nuxt.config.js': ('nuxt', 100, 'nuxt.config.js'),
+            'nuxt.config.ts': ('nuxt', 100, 'nuxt.config.ts'),
+            'gatsby-config.js': ('gatsby', 100, 'gatsby-config.js'),
+            'svelte.config.js': ('svelte', 100, 'svelte.config.js'),
+            'svelte.config.ts': ('svelte', 100, 'svelte.config.ts'),
+            'astro.config.js': ('astro', 100, 'astro.config.js'),
+            'astro.config.ts': ('astro', 100, 'astro.config.ts'),
+            'astro.config.mjs': ('astro', 100, 'astro.config.mjs'),
+            
+            # Vite usually means React/Vue but we'll say react
+            'vite.config.js': ('react', 80, 'vite.config.js'),
+            'vite.config.ts': ('react', 80, 'vite.config.ts'),
+            
+            # Build tools that suggest Node/JS
+            'turbo.json': ('nodejs', 90, 'turbo.json'),
+            'nx.json': ('nodejs', 90, 'nx.json'),
+            'lerna.json': ('nodejs', 90, 'lerna.json'),
+            'rush.json': ('nodejs', 90, 'rush.json'),
+            
+            # TypeScript
+            'tsconfig.json': ('typescript', 70, 'tsconfig.json'),
+            
+            # Node.js package files
+            'package.json': ('nodejs', 60, 'package.json'),
+            'package-lock.json': ('nodejs', 50, 'package.json'),
+            'yarn.lock': ('nodejs', 50, 'package.json'),
+            'pnpm-lock.yaml': ('nodejs', 50, 'package.json'),
+            'bun.lockb': ('bun', 80, 'bun.lockb'),
+            
+            # Python
+            'pyproject.toml': ('python', 90, 'pyproject.toml'),
+            'requirements.txt': ('python', 80, 'requirements.txt'),
+            'setup.py': ('python', 80, 'setup.py'),
+            'Pipfile': ('python', 85, 'Pipfile'),
+            'poetry.lock': ('python', 85, 'poetry.lock'),
+            'tox.ini': ('python', 70, 'tox.ini'),
+            
+            # Rust
             'Cargo.toml': ('rust', 100, 'Cargo.toml'),
+            
+            # Go
             'go.mod': ('go', 100, 'go.mod'),
+            
+            # Java/Gradle
+            'pom.xml': ('java', 90, 'pom.xml'),
+            'build.gradle': ('gradle', 90, 'build.gradle'),
+            'build.gradle.kts': ('gradle', 90, 'build.gradle.kts'),
+            'settings.gradle': ('gradle', 85, 'settings.gradle'),
+            'settings.gradle.kts': ('gradle', 85, 'settings.gradle.kts'),
+            'gradlew': ('gradle', 80, 'gradlew'),
+            
+            # .NET
+            'global.json': ('dotnet', 90, 'global.json'),
+            '*.sln': ('dotnet', 95, '*.sln'),
+            '*.csproj': ('dotnet', 90, '*.csproj'),
+            
+            # Swift
             'Package.swift': ('swift', 100, 'Package.swift'),
-            'requirements.txt': ('python', 90, 'requirements.txt'),
-            'pyproject.toml': ('python', 95, 'pyproject.toml'),
-            'setup.py': ('python', 95, 'setup.py'),
-            'Gemfile': ('ruby', 100, 'Gemfile'),
-            'build.gradle': ('java', 95, 'build.gradle'),
-            'pom.xml': ('java', 95, 'pom.xml'),
+            
+            # PHP
             'composer.json': ('php', 100, 'composer.json'),
-            'pubspec.yaml': ('dart', 100, 'pubspec.yaml'),
             
-            # Priority 2: Build systems
-            '.xcworkspace': ('swift', 95, 'Xcode Workspace'),
-            '.xcodeproj': ('swift', 90, 'Xcode Project'),
+            # Ruby
+            'Gemfile': ('ruby', 100, 'Gemfile'),
+            
+            # C/C++ build systems
+            'CMakeLists.txt': ('cmake', 90, 'CMakeLists.txt'),
             'Makefile': ('make', 70, 'Makefile'),
-            'CMakeLists.txt': ('cmake', 75, 'CMakeLists.txt'),
+            'meson.build': ('meson', 90, 'meson.build'),
+            'configure.ac': ('autotools', 85, 'configure.ac'),
             
-            # Priority 3: Environment/config
-            'docker-compose.yml': ('docker', 80, 'docker-compose.yml'),
-            'Dockerfile': ('docker', 75, 'Dockerfile'),
-            '.venv': ('python', 70, 'Python venv'),
-            'venv': ('python', 70, 'Python venv'),
+            # Bazel
+            'WORKSPACE': ('bazel', 90, 'WORKSPACE'),
+            'WORKSPACE.bazel': ('bazel', 90, 'WORKSPACE.bazel'),
+            'BUILD': ('bazel', 85, 'BUILD'),
+            'BUILD.bazel': ('bazel', 85, 'BUILD.bazel'),
+            
+            # Docker
+            'docker-compose.yml': ('docker', 90, 'docker-compose.yml'),
+            'docker-compose.yaml': ('docker', 90, 'docker-compose.yaml'),
+            'Dockerfile': ('docker', 85, 'Dockerfile'),
+            
+            # Deno
+            'deno.json': ('deno', 100, 'deno.json'),
+            'deno.jsonc': ('deno', 100, 'deno.jsonc'),
+            
+            # Git
+            '.git/HEAD': ('git', 50, '.git'),
+            
+            # Xcode
+            '*.xcodeproj/project.pbxproj': ('xcode', 95, '*.xcodeproj'),
+            '*.xcworkspace/contents.xcworkspacedata': ('xcode', 90, '*.xcworkspace'),
         }
         
-        # Check markers in priority order
+        # Find the highest priority marker
         best_match = None
-        best_score = 0
+        best_priority = -1
         
-        for marker in markers_found:
-            if marker in language_priorities:
-                lang, score, display_marker = language_priorities[marker]
-                if score > best_score:
-                    best_match = (lang, score, display_marker)
-                    best_score = score
+        for marker in markers:
+            # Check exact match first
+            if marker in marker_priority:
+                lang, confidence, primary = marker_priority[marker]
+                if confidence > best_priority:
+                    best_match = (lang, confidence, primary)
+                    best_priority = confidence
+            else:
+                # Check for pattern matches (e.g., *.sln, *.csproj)
+                for pattern, (lang, confidence, primary) in marker_priority.items():
+                    if '*' in pattern:
+                        # Simple wildcard matching
+                        if pattern.startswith('*') and marker.endswith(pattern[1:]):
+                            if confidence > best_priority:
+                                best_match = (lang, confidence, marker)
+                                best_priority = confidence
+                        elif pattern.endswith('*') and marker.startswith(pattern[:-1]):
+                            if confidence > best_priority:
+                                best_match = (lang, confidence, marker)
+                                best_priority = confidence
         
-        # If we have a high-confidence match, check for specific frameworks
-        if best_match and best_score >= 90:
-            lang, score, display_marker = best_match
+        # Special handling for Node projects with multiple markers
+        if best_match and best_match[0] in ['nodejs', 'typescript']:
+            # Check if we have more specific framework markers
+            framework_markers = {
+                'next.config.js', 'next.config.ts', 'next.config.mjs',
+                'angular.json', 'nuxt.config.js', 'nuxt.config.ts',
+                'gatsby-config.js', 'svelte.config.js', 'svelte.config.ts',
+                'vite.config.js', 'vite.config.ts'
+            }
             
-            # For Git repos, check if it's actually a framework project
-            if lang == 'git':
-                # Check for Node.js project
-                if os.path.exists(os.path.join(project_path, 'package.json')):
-                    framework = self.detect_js_framework(project_path)
-                    return (framework, score, 'Git + ' + framework)
-                # Check for Python project
-                elif any(os.path.exists(os.path.join(project_path, m)) 
-                        for m in ['requirements.txt', 'setup.py', 'pyproject.toml', 'Pipfile']):
-                    framework = self.detect_python_framework(project_path)
-                    return (framework, score, 'Git + ' + framework)
-                # Check for other language markers
-                elif os.path.exists(os.path.join(project_path, 'Cargo.toml')):
-                    return ('rust', score, 'Git + Rust')
-                elif os.path.exists(os.path.join(project_path, 'go.mod')):
-                    return ('go', score, 'Git + Go')
-                elif os.path.exists(os.path.join(project_path, 'Gemfile')):
-                    return ('ruby', score, 'Git + Ruby')
-                elif os.path.exists(os.path.join(project_path, 'Package.swift')):
-                    return ('swift', score, 'Git + Swift')
-            # For Node.js projects, detect specific framework
-            elif lang == 'node':
-                framework = self.detect_js_framework(project_path)
-                return (framework, score, display_marker)
-            # For Python projects, detect specific framework
-            elif lang == 'python':
-                framework = self.detect_python_framework(project_path)
-                return (framework, score, display_marker)
-            return best_match
+            for marker in markers:
+                if marker in framework_markers:
+                    # Already handled above, just return the best match
+                    break
         
-        # For git repos or low-confidence matches, analyze file extensions
-        if '.git' in markers_found or best_score < 90:
-            lang_from_files = self.analyze_file_extensions(project_path)
-            if lang_from_files:
-                # If we have a match from markers, combine confidence
-                if best_match:
-                    # Average the confidence scores
-                    combined_score = (best_score + lang_from_files[1]) / 2
-                    # Prefer the marker-based detection if languages match
-                    if best_match[0] == lang_from_files[0]:
-                        final_lang = best_match[0]
-                        # For Node.js projects, detect specific framework
-                        if final_lang == 'node':
-                            final_lang = self.detect_js_framework(project_path)
-                        # For Python projects, detect specific framework
-                        elif final_lang == 'python':
-                            final_lang = self.detect_python_framework(project_path)
-                        return (final_lang, combined_score, best_match[2])
-                    # Otherwise, use file analysis if it's more confident
-                    elif lang_from_files[1] > best_score:
-                        final_lang = lang_from_files[0]
-                        # For Node.js projects, detect specific framework
-                        if final_lang == 'node':
-                            final_lang = self.detect_js_framework(project_path)
-                            return (final_lang, lang_from_files[1], lang_from_files[2])
-                        # For Python projects, detect specific framework
-                        elif final_lang == 'python':
-                            final_lang = self.detect_python_framework(project_path)
-                            return (final_lang, lang_from_files[1], lang_from_files[2])
-                        return lang_from_files
-                else:
-                    final_lang = lang_from_files[0]
-                    # For Node.js projects, detect specific framework
-                    if final_lang == 'node':
-                        final_lang = self.detect_js_framework(project_path)
-                        return (final_lang, lang_from_files[1], lang_from_files[2])
-                    # For Python projects, detect specific framework
-                    elif final_lang == 'python':
-                        final_lang = self.detect_python_framework(project_path)
-                        return (final_lang, lang_from_files[1], lang_from_files[2])
-                    return lang_from_files
-        
-        # Return best match or unknown
-        return best_match if best_match else ('unknown', 0, 'folder')
+        # Return just the language string, not the full tuple
+        if best_match:
+            return best_match[0]  # Just return the language type
+        else:
+            return 'unknown'
+    
     
     def scan_projects(self, paths=None, max_depth=3, max_results=500, 
                      follow_symlinks=False, use_ripgrep=True, os_type='unknown'):
@@ -1744,7 +1785,6 @@ class RemoteFileManager:
                         if follow_symlinks:
                             cmd.append('-L')
                         
-                        # Add glob patterns for sentinel files (no directory wildcards!)
                         for sentinel_file in sentinel_files.keys():
                             cmd.extend(['-g', f'**/{sentinel_file}'])
                         
@@ -1768,13 +1808,23 @@ class RemoteFileManager:
                             # Use simpler exclusion pattern for better performance
                             cmd.extend(['--glob', f'!**/{pattern}/**'])
                         
+                        # Special handling: Exclude dot folders in home directory
+                        # These are config/tool directories, not user projects
+                        home_dir = os.path.expanduser('~')
+                        if scan_path == home_dir or scan_path.startswith(home_dir):
+                            # Exclude all dot folders at the home directory level
+                            # This pattern excludes ~/.composer/*, ~/.nvim/*, etc.
+                            cmd.extend(['--glob', f'!{home_dir}/.*/**'])
+                        
                         cmd.append(scan_path)
                         
                         # Run ripgrep with OS-specific timeout
                         result = subprocess.run(cmd, capture_output=True, text=True, 
                                               timeout=timeout, check=False)
                         
-                        if result.returncode in [0, 1]:  # 0=found matches, 1=no matches (but successful)
+                        # Accept return code 2 as well - ripgrep returns 2 for permission errors
+                        # but still outputs the files it could access
+                        if result.returncode in [0, 1, 2]:  # 0=found matches, 1=no matches, 2=some errors but has output
                             # Process results - now much faster with fewer results
                             for line in result.stdout.strip().split('\n'):
                                 if not line:
