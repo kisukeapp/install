@@ -174,8 +174,10 @@ detect_package_manager() {
         cmd=${entry%%:*}; name=${entry##*:}
         if command -v "$cmd" >/dev/null 2>&1; then 
             PKG_MGR="$name"
-            # Store brew path if found
-            [[ "$name" == "brew" ]] && BREW_CMD="$cmd"
+            # Store brew full path if found
+            if [[ "$name" == "brew" ]]; then
+                BREW_CMD=$(command -v "$cmd")
+            fi
             return 0
         fi
     done
@@ -232,14 +234,34 @@ get_version() {
             ;;
         tmux) 
             # On macOS, check brew first if available
-            if [[ "$OS" == "mac" && -n "$BREW_CMD" ]] && $BREW_CMD list tmux >/dev/null 2>&1; then
-                # Use brew's tmux path
-                local tmux_path="${BREW_CMD%/brew}/tmux"
-                if [[ -x "$tmux_path" ]]; then
-                    ver=$($tmux_path -V 2>/dev/null | awk '{print $2}' || echo "unknown")
-                    [[ -z "$ver" ]] && ver="unknown"
+            if [[ "$OS" == "mac" && -n "$BREW_CMD" ]]; then
+                # Ensure we have the brew executable (handle both full path and command name)
+                local brew_exe="$BREW_CMD"
+                if [[ ! -x "$brew_exe" ]]; then
+                    brew_exe=$(command -v "$BREW_CMD" 2>/dev/null)
                 fi
-            elif command -v tmux >/dev/null 2>&1; then
+                
+                if [[ -x "$brew_exe" ]] && "$brew_exe" list tmux >/dev/null 2>&1; then
+                    # Get the actual tmux path from brew
+                    local tmux_path=""
+                    local brew_prefix
+                    if brew_prefix=$("$brew_exe" --prefix tmux 2>/dev/null); then
+                        tmux_path="$brew_prefix/bin/tmux"
+                    fi
+                    # Fallback to standard brew bin location if prefix command fails
+                    if [[ ! -x "$tmux_path" && "$brew_exe" =~ ^/.*/brew$ ]]; then
+                        # Only try this if brew_exe is a full path
+                        tmux_path="${brew_exe%/brew}/tmux"
+                    fi
+                    # Get version if we found the executable
+                    if [[ -x "$tmux_path" ]]; then
+                        ver=$("$tmux_path" -V 2>/dev/null | awk '{print $2}' || echo "unknown")
+                        [[ -z "$ver" ]] && ver="unknown"
+                    fi
+                fi
+            fi
+            # Fallback to command -v if not found via brew
+            if [[ -z "$ver" || "$ver" == "unknown" ]] && command -v tmux >/dev/null 2>&1; then
                 ver=$(tmux -V 2>/dev/null | awk '{print $2}' || echo "unknown")
                 [[ -z "$ver" ]] && ver="unknown"
             fi
@@ -460,17 +482,53 @@ create_system_symlinks() {
                 rm -f "$BIN_DIR/$pkg"
                 log NOTIFY "Removed existing symlink: $pkg"
             fi
-            if command -v "$pkg" >/dev/null 2>&1; then
-                local system_path
-                if system_path=$(command -v "$pkg" 2>/dev/null); then
-                    if ln -sf "$system_path" "$BIN_DIR/$pkg"; then
-                        log NOTIFY "Created symlink: $pkg -> $system_path"
-                        return 0
-                    else
-                        log ERROR "Failed to create symlink: $pkg -> $system_path"
-                        return 1
+            
+            local system_path=""
+            
+            # Special handling for tmux on macOS with brew
+            if [[ "$pkg" == "tmux" && "$OS" == "mac" && -n "$BREW_CMD" ]]; then
+                # Ensure we have the brew executable (handle both full path and command name)
+                local brew_exe="$BREW_CMD"
+                if [[ ! -x "$brew_exe" ]]; then
+                    brew_exe=$(command -v "$BREW_CMD" 2>/dev/null)
+                fi
+                
+                if [[ -x "$brew_exe" ]]; then
+                    # Check if tmux is installed via brew
+                    if "$brew_exe" list tmux >/dev/null 2>&1; then
+                        # Get the actual tmux path from brew prefix
+                        local brew_prefix
+                        if brew_prefix=$("$brew_exe" --prefix tmux 2>/dev/null); then
+                            system_path="$brew_prefix/bin/tmux"
+                        fi
+                        # Fallback to standard brew bin location if prefix command fails
+                        if [[ ! -x "$system_path" && "$brew_exe" =~ ^/.*/brew$ ]]; then
+                            # Only try this if brew_exe is a full path
+                            system_path="${brew_exe%/brew}/tmux"
+                        fi
                     fi
                 fi
+            fi
+            
+            # Fallback to command -v if not found via brew or for other packages
+            if [[ -z "$system_path" || ! -x "$system_path" ]]; then
+                if command -v "$pkg" >/dev/null 2>&1; then
+                    system_path=$(command -v "$pkg" 2>/dev/null)
+                fi
+            fi
+            
+            # Create symlink if we found the executable
+            if [[ -n "$system_path" && -x "$system_path" ]]; then
+                if ln -sf "$system_path" "$BIN_DIR/$pkg"; then
+                    log NOTIFY "Created symlink: $pkg -> $system_path"
+                    return 0
+                else
+                    log ERROR "Failed to create symlink: $pkg -> $system_path"
+                    return 1
+                fi
+            else
+                log ERROR "Could not find $pkg executable"
+                return 1
             fi
             ;;
     esac
