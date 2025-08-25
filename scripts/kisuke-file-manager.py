@@ -983,7 +983,7 @@ class RemoteFileManager:
             path = self.safe_path(path)
             
             # Construct ripgrep command with options
-            cmd = ['rg']
+            cmd = [os.path.expanduser('~/.kisuke/bin/rg')]
             
             # Add basic ripgrep flags
             cmd.extend(['--json', '--max-count', str(max_results)])
@@ -1112,7 +1112,7 @@ class RemoteFileManager:
             
             # Try ripgrep first for speed
             try:
-                cmd = ['rg', '--files', '--max-count', str(max_files)]
+                cmd = [os.path.expanduser('~/.kisuke/bin/rg'), '--files', '--max-count', str(max_files)]
                 for exclude in exclude_dirs:
                     cmd.extend(['--glob', f'!{exclude}'])
                 cmd.append(project_path)
@@ -1731,7 +1731,7 @@ class RemoteFileManager:
                 try:
                     # Try using ripgrep for ultra-fast scanning with sentinel files
                     for scan_path in valid_paths[:5]:  # Limit to first 5 paths for performance
-                        cmd = ['rg', '--files', '--hidden', '--no-ignore-vcs']
+                        cmd = [os.path.expanduser('~/.kisuke/bin/rg'), '--files', '--hidden', '--no-ignore-vcs']
                         
                         # Add depth limit
                         cmd.extend(['--max-depth', str(max_depth)])
