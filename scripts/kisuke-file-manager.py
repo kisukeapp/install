@@ -54,8 +54,93 @@ class RemoteFileManager:
     # Patterns to exclude from file operations and searches
     DEFAULT_EXCLUDES = ['.git', 'node_modules', '.DS_Store', '*.pyc', '__pycache__']
     
+    # OS-specific ignore patterns for project scanning
+    OS_SPECIFIC_IGNORES = {
+        'darwin': [  # macOS
+            '.Trash', '.Trashes',
+            'Library/Caches', 'Library/Logs',
+            'Library/Application Support',
+            'Library/Developer/Xcode/DerivedData',
+            'Library/Developer/CoreSimulator',
+            '.Spotlight-V100', '.fseventsd',
+            '.DocumentRevisions-V100', '.TemporaryItems',
+            'Library/Mail', 'Library/Safari',
+            'Library/Messages', 'Library/Calendars',
+            'Library/Containers', 'Library/Cookies'
+        ],
+        'linux': [
+            '.cache', '.local/share/Trash',
+            'snap', '.steam', '.wine',
+            '.local/share', '.config/google-chrome',
+            '.mozilla', '.thunderbird'
+        ],
+        'windows': [
+            'AppData', '$RECYCLE.BIN',
+            'Windows', 'ProgramData'
+        ]
+    }
+    
+    # OS-specific scan defaults
+    OS_SCAN_DEFAULTS = {
+        'darwin': {
+            'max_depth': 3,  # Shallower on macOS due to deep Library folders
+            'timeout': 30    # Longer timeout for larger filesystems
+        },
+        'linux': {
+            'max_depth': 4,
+            'timeout': 20
+        },
+        'windows': {
+            'max_depth': 3,
+            'timeout': 20
+        }
+    }
+    
     def __init__(self):
         mimetypes.init()
+    
+    def get_os_ignore_patterns(self, os_type='unknown'):
+        """Get OS-specific ignore patterns for project scanning.
+        
+        Args:
+            os_type: Operating system type ('darwin', 'linux', 'windows', etc.)
+            
+        Returns:
+            List of patterns to ignore during scanning.
+        """
+        base_ignores = [
+            'node_modules', '.cache', 'target', 'dist',
+            'build', 'out', '.next', '.nuxt', 'vendor',
+            '*.min.js', '*.bundle.js', 'coverage'
+        ]
+        
+        # Get OS-specific ignores
+        os_ignores = self.OS_SPECIFIC_IGNORES.get(os_type.lower(), [])
+        
+        return base_ignores + os_ignores
+    
+    def normalize_path_for_os(self, path, os_type='unknown'):
+        """Normalize path based on OS filesystem characteristics.
+        
+        For case-insensitive filesystems (macOS), returns both display
+        and comparison paths to handle duplicates properly.
+        
+        Args:
+            path: Path to normalize.
+            os_type: Operating system type.
+            
+        Returns:
+            Tuple of (display_path, comparison_key).
+        """
+        expanded = os.path.expanduser(path)
+        real = os.path.realpath(expanded)
+        
+        if os_type.lower() == 'darwin':
+            # macOS is case-insensitive, use lowercase for comparison
+            return real, real.lower()
+        else:
+            # Linux/others are case-sensitive
+            return real, real
     
     def safe_path(self, path):
         """Sanitize and validate a file path.
@@ -1100,12 +1185,16 @@ class RemoteFileManager:
         except Exception:
             return None
     
-    def process_discovered_projects(self, discovered, max_results):
+    def process_discovered_projects(self, discovered, max_results, os_type='unknown'):
         """Post-process discovered projects to filter and detect languages.
+        
+        Includes OS-specific path normalization to handle case-insensitive
+        filesystems and prevent duplicates.
         
         Args:
             discovered: Dictionary of discovered projects
             max_results: Maximum number of results to return
+            os_type: Operating system type for path normalization
             
         Returns:
             List of processed and filtered projects
@@ -1116,12 +1205,28 @@ class RemoteFileManager:
                                '__pycache__', '.pytest_cache', '.tox',
                                'DerivedData', 'Build', '.build'}
         
-        # Normalize all paths first
+        # Normalize all paths first with OS-specific handling
         normalized_discovered = {}
+        seen_paths = {}  # Track normalized paths to prevent duplicates
+        
         for path, info in discovered.items():
-            normalized_path = os.path.normpath(path.rstrip('/'))
-            info['path'] = normalized_path  # Update the path in info too
-            normalized_discovered[normalized_path] = info
+            # Get OS-specific normalized paths
+            display_path, comparison_key = self.normalize_path_for_os(path, os_type)
+            
+            # Skip duplicates (case-insensitive on macOS)
+            if comparison_key in seen_paths:
+                # Merge markers if it's the same project
+                existing = seen_paths[comparison_key]
+                if 'markers' in info and 'markers' in normalized_discovered[existing]:
+                    for marker in info['markers']:
+                        if marker not in normalized_discovered[existing]['markers']:
+                            normalized_discovered[existing]['markers'].append(marker)
+                continue
+            
+            # Store with display path
+            info['path'] = display_path
+            normalized_discovered[display_path] = info
+            seen_paths[comparison_key] = display_path
         
         for project_path, project_info in normalized_discovered.items():
             # Get the project name and markers
@@ -1471,7 +1576,7 @@ class RemoteFileManager:
         return best_match if best_match else ('unknown', 0, 'folder')
     
     def scan_projects(self, paths=None, max_depth=3, max_results=500, 
-                     follow_symlinks=False, use_ripgrep=True):
+                     follow_symlinks=False, use_ripgrep=True, os_type='unknown'):
         """Ultra-fast project discovery using ripgrep or find.
         
         Scans directories for project markers like .git, package.json, etc.
@@ -1483,6 +1588,7 @@ class RemoteFileManager:
             max_results: Maximum number of projects to return.
             follow_symlinks: Whether to follow symbolic links.
             use_ripgrep: Try to use ripgrep for faster scanning.
+            os_type: Operating system type for OS-specific handling.
             
         Returns:
             Dictionary containing:
@@ -1493,6 +1599,12 @@ class RemoteFileManager:
                 - error: Error message if operation failed
         """
         try:
+            # Apply OS-specific defaults
+            os_defaults = self.OS_SCAN_DEFAULTS.get(os_type.lower(), {})
+            if os_type.lower() == 'darwin' and max_depth > 3:
+                # Limit depth on macOS for performance with large Library folders
+                max_depth = min(max_depth, os_defaults.get('max_depth', 3))
+            timeout = os_defaults.get('timeout', 20)
             # Default paths if none provided
             if not paths:
                 paths = [
@@ -1521,78 +1633,149 @@ class RemoteFileManager:
             
             discovered = {}  # Use dict to deduplicate by path
             
-            # Project markers and their types
-            # Separate file markers from directory markers for proper handling
-            file_markers = [
-                ('package.json', 'node'),
-                ('Package.swift', 'swift'),
-                ('Cargo.toml', 'rust'),
-                ('go.mod', 'go'),
-                ('requirements.txt', 'python'),
-                ('pyproject.toml', 'python'),
-                ('setup.py', 'python'),
-                ('Gemfile', 'ruby'),
-                ('build.gradle', 'java'),
-                ('pom.xml', 'java'),
-                ('composer.json', 'php'),
-                ('pubspec.yaml', 'dart'),
-                ('Makefile', 'make'),
-                ('CMakeLists.txt', 'cmake'),
-                ('docker-compose.yml', 'docker'),
-                ('Dockerfile', 'docker')
-            ]
+            # Comprehensive sentinel files for fast project discovery
+            # Using only sentinel files, no directory wildcards for performance
+            sentinel_files = {
+                # JavaScript/TypeScript ecosystem (highest coverage)
+                'package.json': 'node',
+                'pnpm-workspace.yaml': 'node',
+                'yarn.lock': 'node',
+                'pnpm-lock.yaml': 'node',
+                'package-lock.json': 'node',
+                'turbo.json': 'node',
+                'nx.json': 'node',
+                'lerna.json': 'node',
+                'rush.json': 'node',
+                'tsconfig.json': 'typescript',
+                
+                # Framework configs
+                'next.config.js': 'nextjs',
+                'next.config.ts': 'nextjs',
+                'next.config.mjs': 'nextjs',
+                'vite.config.js': 'node',
+                'vite.config.ts': 'node',
+                'nuxt.config.js': 'nuxt',
+                'nuxt.config.ts': 'nuxt',
+                'svelte.config.js': 'svelte',
+                'svelte.config.ts': 'svelte',
+                'angular.json': 'angular',
+                'gatsby-config.js': 'gatsby',
+                'astro.config.js': 'astro',
+                'astro.config.ts': 'astro',
+                'astro.config.mjs': 'astro',
+                'astro.config.cjs': 'astro',
+                
+                # Other JS runtimes
+                'deno.json': 'deno',
+                'deno.jsonc': 'deno',
+                'bun.lockb': 'bun',
+                
+                # Python
+                'pyproject.toml': 'python',
+                'requirements.txt': 'python',
+                'setup.py': 'python',
+                'Pipfile': 'python',
+                'poetry.lock': 'python',
+                'tox.ini': 'python',
+                
+                # Rust/Go
+                'Cargo.toml': 'rust',
+                'go.mod': 'go',
+                
+                # Java/Android/Gradle
+                'pom.xml': 'java',
+                'build.gradle': 'gradle',
+                'build.gradle.kts': 'gradle',
+                'settings.gradle': 'gradle',
+                'settings.gradle.kts': 'gradle',
+                'gradlew': 'gradle',
+                
+                # .NET
+                'global.json': 'dotnet',
+                
+                # Swift/Xcode
+                'Package.swift': 'swift',
+                
+                # PHP/Ruby
+                'composer.json': 'php',
+                'Gemfile': 'ruby',
+                
+                # Build systems
+                'CMakeLists.txt': 'cmake',
+                'meson.build': 'meson',
+                'configure.ac': 'autotools',
+                'WORKSPACE': 'bazel',
+                'WORKSPACE.bazel': 'bazel',
+                'BUILD': 'bazel',
+                'BUILD.bazel': 'bazel',
+                'Makefile': 'make',
+                
+                # Docker
+                'Dockerfile': 'docker',
+                'docker-compose.yml': 'docker',
+                'docker-compose.yaml': 'docker',
+            }
             
-            directory_markers = [
-                ('.git', 'git'),
-                ('.xcworkspace', 'xcode'),  # Prioritize workspace over project
-                ('.xcodeproj', 'xcode'),
-                ('.venv', 'python'),
-                ('venv', 'python')
+            # Special patterns that need wildcards (kept minimal)
+            # These are sentinel files within specific directories
+            special_sentinels = [
+                ('.git/HEAD', 'git'),  # Real git repo
+                ('*.xcodeproj/project.pbxproj', 'xcode'),
+                ('*.xcworkspace/contents.xcworkspacedata', 'xcode'),
+                ('gradle/wrapper/gradle-wrapper.properties', 'gradle'),
+                ('*.sln', 'dotnet'),
+                ('*.csproj', 'dotnet'),
             ]
-            
-            # Combined list for processing
-            all_markers = file_markers + directory_markers
             
             if use_ripgrep:
                 try:
-                    # Try using ripgrep for ultra-fast scanning
+                    # Try using ripgrep for ultra-fast scanning with sentinel files
                     for scan_path in valid_paths[:5]:  # Limit to first 5 paths for performance
                         cmd = ['rg', '--files', '--hidden', '--no-ignore-vcs']
                         
                         # Add depth limit
                         cmd.extend(['--max-depth', str(max_depth)])
                         
+                        # Performance optimizations
+                        cmd.extend(['--max-filesize', '1M'])  # Skip large files
+                        cmd.extend(['--threads', '4'])  # Limit parallelism to avoid overwhelming
+                        
                         # Add follow symlinks if requested
                         if follow_symlinks:
                             cmd.append('-L')
                         
-                        # Add glob patterns for all project markers
-                        # Files first
-                        for marker, _ in file_markers:
-                            cmd.extend(['-g', f'**/{marker}'])
+                        # Add glob patterns for sentinel files (no directory wildcards!)
+                        for sentinel_file in sentinel_files.keys():
+                            cmd.extend(['-g', f'**/{sentinel_file}'])
                         
-                        # Then directories - match any file inside them
-                        for marker, _ in directory_markers:
-                            cmd.extend(['-g', f'**/{marker}/**'])
+                        # Add special sentinels with minimal wildcards
+                        for pattern, _ in special_sentinels:
+                            cmd.extend(['-g', f'**/{pattern}'])
                         
-                        # Exclude common large directories
-                        exclude_patterns = [
-                            'node_modules', '.cache', 'target', 'dist',
-                            'build', 'out', '.next', '.nuxt', 'vendor',
-                            '*.min.js', '*.bundle.js', 'coverage'
+                        # Exclude common large directories and OS-specific patterns
+                        # Critical exclusions for performance
+                        critical_excludes = [
+                            'node_modules', '.pnpm-store', '.git', '.cache', 
+                            'dist', 'build', 'out', '.next', '.nuxt', 
+                            'target', 'vendor', 'DerivedData', 'coverage', 'Pods'
                         ]
                         
-                        for pattern in exclude_patterns:
+                        # Add OS-specific excludes
+                        os_excludes = self.get_os_ignore_patterns(os_type)
+                        all_excludes = set(critical_excludes + os_excludes)
+                        
+                        for pattern in all_excludes:
+                            # Use simpler exclusion pattern for better performance
                             cmd.extend(['--glob', f'!**/{pattern}/**'])
                         
                         cmd.append(scan_path)
                         
-                        # Run ripgrep
+                        # Run ripgrep with OS-specific timeout
                         result = subprocess.run(cmd, capture_output=True, text=True, 
-                                              timeout=10, check=False)
+                                              timeout=timeout, check=False)
                         
                         if result.returncode in [0, 1]:  # 0=found matches, 1=no matches (but successful)
-                            # Process results
+                            # Process results - now much faster with fewer results
                             for line in result.stdout.strip().split('\n'):
                                 if not line:
                                     continue
@@ -1602,25 +1785,60 @@ class RemoteFileManager:
                                 project_type = None
                                 marker_found = None
                                 
-                                # Check file markers first
-                                for marker, proj_type in file_markers:
-                                    if marker in line and line.endswith(marker):
+                                # Check regular sentinel files
+                                for sentinel, proj_type in sentinel_files.items():
+                                    if line.endswith(f'/{sentinel}'):
                                         project_path = os.path.dirname(line)
                                         project_type = proj_type
-                                        marker_found = marker
+                                        marker_found = sentinel
                                         break
                                 
-                                # Then check directory markers
+                                # Check special sentinels if not found
                                 if not project_path:
-                                    for marker, proj_type in directory_markers:
-                                        if f'/{marker}/' in line:
-                                            # Extract path up to the marker directory
-                                            parts = line.split(f'/{marker}/')
-                                            if parts:
-                                                project_path = parts[0]
+                                    for pattern, proj_type in special_sentinels:
+                                        # Handle .git/HEAD
+                                        if pattern == '.git/HEAD' and line.endswith('/.git/HEAD'):
+                                            project_path = line[:-len('/.git/HEAD')]
+                                            project_type = proj_type
+                                            marker_found = '.git'
+                                            break
+                                        # Handle *.xcodeproj/project.pbxproj
+                                        elif '.xcodeproj/project.pbxproj' in line:
+                                            idx = line.find('.xcodeproj/project.pbxproj')
+                                            if idx > 0:
+                                                # Find the start of the .xcodeproj name
+                                                proj_start = line.rfind('/', 0, idx)
+                                                project_path = line[:proj_start] if proj_start > 0 else os.path.dirname(line[:idx])
                                                 project_type = proj_type
-                                                marker_found = marker
+                                                marker_found = '.xcodeproj'
                                                 break
+                                        # Handle *.xcworkspace/contents.xcworkspacedata
+                                        elif '.xcworkspace/contents.xcworkspacedata' in line:
+                                            idx = line.find('.xcworkspace/contents.xcworkspacedata')
+                                            if idx > 0:
+                                                proj_start = line.rfind('/', 0, idx)
+                                                project_path = line[:proj_start] if proj_start > 0 else os.path.dirname(line[:idx])
+                                                project_type = proj_type
+                                                marker_found = '.xcworkspace'
+                                                break
+                                        # Handle gradle wrapper
+                                        elif 'gradle/wrapper/gradle-wrapper.properties' in line:
+                                            idx = line.find('gradle/wrapper/gradle-wrapper.properties')
+                                            project_path = line[:idx].rstrip('/')
+                                            project_type = proj_type
+                                            marker_found = 'gradle'
+                                            break
+                                        # Handle .sln and .csproj files
+                                        elif pattern == '*.sln' and line.endswith('.sln'):
+                                            project_path = os.path.dirname(line)
+                                            project_type = proj_type
+                                            marker_found = '.sln'
+                                            break
+                                        elif pattern == '*.csproj' and line.endswith('.csproj'):
+                                            project_path = os.path.dirname(line)
+                                            project_type = proj_type
+                                            marker_found = '.csproj'
+                                            break
                                 
                                 if project_path:
                                     project_name = os.path.basename(project_path)
@@ -1661,7 +1879,7 @@ class RemoteFileManager:
                     
                     # If ripgrep succeeded, process results
                     if discovered:
-                        projects = self.process_discovered_projects(discovered, max_results)
+                        projects = self.process_discovered_projects(discovered, max_results, os_type)
                         return {
                             'success': True,
                             'projects': projects,
@@ -1669,130 +1887,31 @@ class RemoteFileManager:
                             'scan_method': 'ripgrep'
                         }
                     
-                except (subprocess.TimeoutExpired, FileNotFoundError):
-                    pass  # Fall back to find
-            
-            # Fallback to find command if ripgrep not available or failed
-            for scan_path in valid_paths[:3]:  # Limit paths for find
-                # Build find command for all markers
-                find_cmd = ['find', scan_path, '-maxdepth', str(max_depth)]
-                
-                if follow_symlinks:
-                    find_cmd.append('-L')
-                
-                # Add all marker patterns
-                find_cmd.append('(')
-                first = True
-                
-                # Add file markers
-                for marker, _ in file_markers[:8]:  # Limit for performance
-                    if not first:
-                        find_cmd.append('-o')
-                    find_cmd.extend(['-type', 'f', '-name', marker])
-                    first = False
-                
-                # Add directory markers
-                for marker, _ in directory_markers:
-                    if not first:
-                        find_cmd.append('-o')
-                    find_cmd.extend(['-type', 'd', '-name', marker])
-                    first = False
-                    
-                find_cmd.append(')')
-                
-                # Add exclusions
-                find_cmd.extend([
-                    '!', '-path', '*/node_modules/*',
-                    '!', '-path', '*/.cache/*',
-                    '!', '-path', '*/vendor/*'
-                ])
-                
-                try:
-                    result = subprocess.run(find_cmd, capture_output=True, text=True,
-                                          timeout=15, check=False)
-                    
-                    if result.returncode == 0:
-                        for line in result.stdout.strip().split('\n'):
-                            if not line:
-                                continue
-                            
-                            # Determine project type and root
-                            project_path = None
-                            project_type = None
-                            marker_found = None
-                            
-                            # Check if it's a file marker
-                            for marker, proj_type in file_markers:
-                                if line.endswith('/' + marker):
-                                    project_path = os.path.dirname(line)
-                                    project_type = proj_type
-                                    marker_found = marker
-                                    break
-                            
-                            # Check if it's a directory marker
-                            if not project_path:
-                                for marker, proj_type in directory_markers:
-                                    if line.endswith('/' + marker) or line.endswith('/' + marker + '/'):
-                                        # Directory found - project is its parent
-                                        project_path = os.path.dirname(line.rstrip('/'))
-                                        project_type = proj_type
-                                        marker_found = marker
-                                        break
-                            
-                            if project_path:
-                                project_name = os.path.basename(project_path)
-                                # Handle case where project is at root
-                                if not project_name:
-                                    project_name = os.path.basename(os.path.dirname(project_path))
-                                
-                                # Early filtering: Skip build artifact folders entirely
-                                build_artifacts = {'.next', '.nuxt', 'dist', 'build', 'out', 'target', 
-                                                 'node_modules', 'vendor', '.cache', 'coverage',
-                                                 '__pycache__', '.pytest_cache', '.tox',
-                                                 'DerivedData', 'Build', '.build'}
-                                if project_name in build_artifacts:
-                                    continue
-                                    
-                                # If project already discovered, add to its markers
-                                if project_path in discovered:
-                                    if marker_found not in discovered[project_path].get('markers', []):
-                                        discovered[project_path]['markers'].append(marker_found)
-                                else:
-                                    # New project discovery
-                                    discovered[project_path] = {
-                                        'name': project_name,
-                                        'path': project_path,
-                                        'type': project_type,  # Will be updated later
-                                        'marker': marker_found,
-                                        'markers': [marker_found]
-                                    }
-                                
-                                if len(discovered) >= max_results:
-                                    break
-                            
-                            if len(discovered) >= max_results:
-                                break
-                    
-                    if len(discovered) >= max_results:
-                        break
-                        
                 except subprocess.TimeoutExpired:
-                    if discovered:  # Return what we have so far
-                        break
+                    # Timeout occurred during ripgrep scan
+                    if discovered:
+                        # Return what we found so far, exit the loop
+                        pass  # Will process discovered projects below
                     else:
                         return {
                             'success': False,
-                            'error': 'Scan timeout - filesystem too large'
+                            'error': 'Scan timeout - filesystem too large. Try reducing scan depth or specifying more specific paths.'
                         }
+                except FileNotFoundError:
+                    # Ripgrep not found (shouldn't happen on our system)
+                    return {
+                        'success': False,
+                        'error': 'ripgrep not found. Please ensure ripgrep is installed.'
+                    }
             
             # Post-process discovered projects
-            projects = self.process_discovered_projects(discovered, max_results)
+            projects = self.process_discovered_projects(discovered, max_results, os_type)
             
             return {
                 'success': True,
                 'projects': projects,
                 'total': len(projects),
-                'scan_method': 'find'
+                'scan_method': 'ripgrep'
             }
             
         except Exception as e:
