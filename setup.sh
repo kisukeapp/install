@@ -22,6 +22,7 @@ get_expected_version() {
         ripgrep) echo "14.1.1" ;;
         websockets) echo "15.0.1" ;;
         uvloop) echo "0.21.0" ;;
+        aiohttp) echo "3.11.11" ;;
         *) echo "" ;;
     esac
 }
@@ -814,14 +815,17 @@ install_claude_tools() {
         fi
         
         if [[ "$current_sdk" != "$SDK_VER" ]]; then
-            local ws_ver uv_ver
+            local ws_ver uv_ver aio_ver
             if ! ws_ver=$(get_expected_version websockets); then
                 ws_ver="15.0.1"
             fi
             if ! uv_ver=$(get_expected_version uvloop); then
                 uv_ver="0.21.0"
             fi
-            if "$BIN_DIR/python3/bin/pip" install --force-reinstall --disable-pip-version-check --no-input -q "websockets==$ws_ver" "uvloop==$uv_ver" "claude-code-sdk==$SDK_VER"; then
+            if ! aio_ver=$(get_expected_version aiohttp); then
+                aio_ver="3.11.11"
+            fi
+            if "$BIN_DIR/python3/bin/pip" install --force-reinstall --disable-pip-version-check --no-input -q "websockets==$ws_ver" "uvloop==$uv_ver" "aiohttp==$aio_ver" "claude-code-sdk==$SDK_VER"; then
                 cache_set "claude_sdk" "$SDK_VER"
                 log OK "claude-code-sdk installed v$SDK_VER"
             else
