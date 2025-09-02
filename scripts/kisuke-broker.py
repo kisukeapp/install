@@ -161,6 +161,14 @@ logging.basicConfig(
 )
 log = logging.getLogger("kisuke-broker-sdk")
 
+# Silence noisy websockets keepalive ping/pong messages
+logging.getLogger("websockets.protocol").setLevel(logging.INFO)
+logging.getLogger("websockets.client").setLevel(logging.INFO)
+logging.getLogger("websockets.server").setLevel(logging.INFO)
+log.setLevel(logging.DEBUG if os.getenv("KISUKE_DEBUG") else logging.INFO)
+
+log.debug("this should appear if KISUKE_DEBUG=1")
+
 
 # Claude SDK client with integrated permission handling
 class PermAwareClient(ClaudeSDKClient):
@@ -431,7 +439,7 @@ class KisukeBrokerSDK:
             self._proxy_runner = await start_proxy(self.proxy_host, self.proxy_port)
             log.info("Embedded Claude proxy listening on http://%s:%d", self.proxy_host, self.proxy_port)
             log.info("WebSocket broker starting on port %d", self.port)
-            
+
             # Ensure the stable token exists in the proxy
             if FIXED_ROUTE_TOKEN not in self.global_tokens:
                 # Register a placeholder so the proxy knows this token exists
@@ -506,6 +514,7 @@ class KisukeBrokerSDK:
             extra_headers=config_data.get("extra_headers", {}),
             azure_deployment=config_data.get("azure_deployment"),
             azure_api_version=config_data.get("azure_api_version"),
+            auth_method=config_data.get("auth_method"),  # Pass through auth_method from iOS
         )
 
     async def _register_routes(self, s: Session, routes: list[dict[str, Any]]):
@@ -517,14 +526,14 @@ class KisukeBrokerSDK:
 
             # Create model configs for each size
             cfg = UpstreamConfig()
-            
+
             # Map model sizes to their configs with appropriate defaults
             model_sizes = {
                 "small": ("small", "gpt-4o-mini"),
                 "medium": ("medium", "gpt-4o"),
                 "big": ("big", "gpt-4o")
             }
-            
+
             for attr_name, (key, default_model) in model_sizes.items():
                 if key in r and r[key]:
                     setattr(cfg, attr_name, self._create_model_config(r[key], default_model))
@@ -679,8 +688,21 @@ class KisukeBrokerSDK:
             workdir = cfg.get("workdir")
             if workdir:
                 exists, expanded_workdir = PathUtils.ensure_directory_exists(workdir)
+                log.debug("Workdir check: raw=%r expanded=%r exists=%s", workdir, expanded_workdir, exists)
+                try:
+                    log.debug("os.path.isdir(%r)=%s", expanded_workdir, os.path.isdir(expanded_workdir))
+                    log.debug("os.path.exists(%r)=%s", expanded_workdir, os.path.exists(expanded_workdir))
+                    log.debug("os.access(%r, R_OK|X_OK)=%s", expanded_workdir,
+                              os.access(expanded_workdir, os.R_OK | os.X_OK))
+                    log.debug("Effective UID=%s, GID=%s", os.geteuid(), os.getegid())
+                except Exception as e:
+                    log.error("Error while probing workdir %r: %s", expanded_workdir, e)
+
                 if not exists:
-                    raise ValueError(f"Working directory does not exist: {workdir}")
+                    raise ValueError(
+                        f"Working directory does not exist: {workdir} "
+                        f"(expanded={expanded_workdir})"
+                    )
                 log.info("Using working directory: %s (expanded from: %s)", expanded_workdir, workdir)
                 workdir = expanded_workdir
             else:
@@ -745,6 +767,14 @@ class KisukeBrokerSDK:
                 "type": "claude_ready",
                 "session_id": s.session_id
             })
+
+            initial_prompt = (cfg.get("prompt") or "").strip()
+            if initial_prompt:
+                log.info("Sending initial prompt (%d chars) for session %s",
+                         len(initial_prompt), s.session_id)
+                await self._relay_user_message(s, initial_prompt)
+            else:
+                log.debug("No initial prompt provided in start payload.")
 
         except Exception as e:
             log.error("Failed to start Claude client: %s", e, exc_info=True)

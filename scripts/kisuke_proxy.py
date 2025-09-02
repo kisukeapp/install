@@ -48,21 +48,24 @@ from aiohttp import web, ClientSession, ClientTimeout, ClientResponse
 @dataclass
 class ModelConfig:
     """Configuration for a specific model size (small/medium/big)."""
-    provider: str = "openai"             # "openai" | "azure" | "openrouter" | "ollama" | "custom"
+    provider: str = "openai"             # "openai" | "azure" | "openrouter" | "ollama" | "anthropic" | "custom"
     base_url: str = "https://api.openai.com/v1"
     api_key: str = ""                    # upstream secret
     model: str = "gpt-4o"                # target model to use at this provider
     extra_headers: Dict[str, str] = field(default_factory=dict)
-    
+
     # Azure specifics (used if provider == "azure")
     azure_deployment: Optional[str] = None
     azure_api_version: Optional[str] = None
+    
+    # Authentication method (used if provider == "anthropic")
+    auth_method: Optional[str] = None    # "oauth" | "api_key" | None (defaults to api_key)
 
 @dataclass
 class UpstreamConfig:
     """Route configuration with per-model-size provider settings."""
     small: Optional[ModelConfig] = None   # haiku models
-    medium: Optional[ModelConfig] = None  # sonnet models  
+    medium: Optional[ModelConfig] = None  # sonnet models
     big: Optional[ModelConfig] = None     # opus models
 
 # In-memory: token -> config (broker populates this directly)
@@ -284,6 +287,66 @@ def _anthropic_messages_to_openai(messages: List[Dict[str, Any]]) -> Tuple[List[
 
     return out, tool_id_name
 
+def _map_anthropic_to_chatgpt_backend(body: Dict[str, Any], model: str) -> Dict[str, Any]:
+    """
+    Build ChatGPT backend API payload from an Anthropic /v1/messages request body.
+    Used for OAuth authentication with ChatGPT.
+    """
+    input_messages = []
+    
+    # Add system message if present
+    if body.get("system"):
+        input_messages.append({
+            "type": "message",
+            "role": "system",
+            "content": [{"type": "input_text", "text": str(body["system"])}]
+        })
+    
+    # Convert messages to input format
+    for msg in body.get("messages", []):
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        
+        if isinstance(content, str):
+            input_messages.append({
+                "type": "message",
+                "role": role,
+                "content": [{"type": "input_text", "text": content}]
+            })
+        elif isinstance(content, list):
+            content_items = []
+            for item in content:
+                if item.get("type") == "text":
+                    content_items.append({"type": "input_text", "text": item.get("text", "")})
+                # Add other content types as needed
+            input_messages.append({
+                "type": "message",
+                "role": role,
+                "content": content_items
+            })
+    
+    result = {
+        "input": input_messages,
+        "stream": True,  # Always true for OAuth
+        "model": model
+    }
+    
+    # Handle GPT-5 reasoning effort levels
+    if "gpt-5" in model.lower():
+        base_model = "gpt-5"
+        result["model"] = base_model
+        
+        if "minimal" in model.lower():
+            result["reasoning"] = {"effort": "minimal"}
+        elif "low" in model.lower():
+            result["reasoning"] = {"effort": "low"}
+        elif "medium" in model.lower():
+            result["reasoning"] = {"effort": "medium"}
+        elif "high" in model.lower():
+            result["reasoning"] = {"effort": "high"}
+    
+    return result
+
 def _map_anthropic_request_to_openai(body: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, str]]:
     """
     Build OpenAI chat.completions payload from an Anthropic /v1/messages request body.
@@ -343,14 +406,37 @@ def _build_upstream_url_and_headers(cfg: ModelConfig) -> Tuple[str, Dict[str, st
         # Native Anthropic API
         base = cfg.base_url.rstrip("/") if cfg.base_url else "https://api.anthropic.com"
         url = f"{base}/v1/messages"  # Anthropic uses /v1/messages
-        headers = {
-            "x-api-key": cfg.api_key,
-            "anthropic-version": "2023-06-01",
-            "Content-Type": "application/json"
-        }
+        
+        # Check authentication method
+        if cfg.auth_method == "oauth":
+            # OAuth authentication (Bearer token with special headers)
+            headers = {
+                "Authorization": f"Bearer {cfg.api_key}",
+                "Content-Type": "application/json",
+                "anthropic-version": "2023-06-01",
+                "Anthropic-Beta": "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14",
+                "User-Agent": "claude-cli/1.0.83 (external, cli)",
+                "X-App": "cli",
+                "X-Stainless-Helper-Method": "stream",
+                "X-Stainless-Lang": "js",
+                "X-Stainless-Runtime": "node",
+                "X-Stainless-Runtime-Version": "v24.3.0",
+                "X-Stainless-Package-Version": "0.55.1",
+                "Anthropic-Dangerous-Direct-Browser-Access": "true"
+            }
+            # Add ?beta=true to URL for OAuth
+            url = f"{base}/v1/messages?beta=true"
+        else:
+            # Default to API key authentication (x-api-key header)
+            headers = {
+                "x-api-key": cfg.api_key,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json"
+            }
+        
         headers.update(cfg.extra_headers or {})
         return url, headers
-    
+
     elif provider == "azure":
         # Two patterns supported:
         # 1) Use explicit deployment/api-version fields (recommended).
@@ -366,9 +452,27 @@ def _build_upstream_url_and_headers(cfg: ModelConfig) -> Tuple[str, Dict[str, st
         return url, headers
 
     # OpenAI / OpenRouter / Ollama (OpenAI-compatible)
-    base = cfg.base_url.rstrip("/")
-    url = f"{base}/chat/completions"
-    headers = {"Authorization": f"Bearer {cfg.api_key}", "Content-Type": "application/json"}
+    if provider == "openai" and cfg.auth_method == "oauth":
+        # Use ChatGPT backend API endpoint for OAuth (Codex implementation)
+        url = "https://chatgpt.com/backend-api/codex/responses"
+        headers = {
+            "Version": "0.21.0",
+            "Content-Type": "application/json",
+            "Openai-Beta": "responses=experimental",
+            "Session_id": str(uuid.uuid4()),
+            "Accept": "text/event-stream",
+            "Originator": "codex_cli_rs",
+            "Authorization": f"Bearer {cfg.api_key}"
+        }
+        # Add ChatGPT Account ID if provided
+        if cfg.extra_headers and cfg.extra_headers.get("chatgpt_account_id"):
+            headers["Chatgpt-Account-Id"] = cfg.extra_headers["chatgpt_account_id"]
+    else:
+        # Standard OpenAI API headers
+        base = cfg.base_url.rstrip("/")
+        url = f"{base}/chat/completions"
+        headers = {"Authorization": f"Bearer {cfg.api_key}", "Content-Type": "application/json"}
+    
     headers.update(cfg.extra_headers or {})
     return url, headers
 
@@ -443,12 +547,25 @@ async def handle_models(request: web.Request) -> web.Response:
     return web.json_response({"data": [{"id": "claude-3-5-sonnet-latest", "type": "model"}]})
 
 async def handle_messages(request: web.Request) -> web.StreamResponse:
-    # Identify route token from Authorization header
-    auth = request.headers.get("Authorization", "")
-    token = auth.replace("Bearer", "").strip()
+    # --- extract route token from Authorization OR x-api-key ---
+    auth = (request.headers.get("Authorization") or "").strip()
+    x_api = (request.headers.get("x-api-key") or "").strip()
+
+    token = ""
+    if auth:
+        parts = auth.split(None, 1)  # "Bearer <token>"
+        if len(parts) == 2 and parts[0].lower() == "bearer":
+            token = parts[1].strip()
+    if not token and x_api:
+        token = x_api  # Anthropic CLI/SDK uses x-api-key
+
+    if not token:
+        return web.Response(status=401, text="missing Authorization or x-api-key")
+
     route = get_route(token)
     if route is None:
-        return web.Response(status=401, text="unknown route token")
+        src = "Authorization" if auth else ("x-api-key" if x_api else "none")
+        return web.Response(status=401, text=f"unknown route token ({src})")
 
     # Parse request
     try:
@@ -462,7 +579,7 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
     # Get the requested model and determine its size category
     requested_model = body.get("model", "")
     model_size = get_model_size(requested_model)
-    
+
     # Select appropriate config based on model size
     if model_size == "small" and route.small:
         model_config = route.small
@@ -474,20 +591,24 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
         # No config available for this model size
         return web.json_response({
             "type": "error",
-            "error": {"type": "invalid_request_error", 
+            "error": {"type": "invalid_request_error",
                      "message": f"No provider configured for {model_size} models"}
         }, status=400)
-    
+
     # Prepare upstream request based on provider
     is_anthropic = model_config.provider.lower() == "anthropic"
     tool_id_map = {}
-    
+
     if is_anthropic:
         # Pass through native Anthropic format
         upstream_body = body.copy()
         upstream_body["model"] = model_config.model
+    elif model_config.provider == "openai" and model_config.auth_method == "oauth":
+        # Use ChatGPT backend API format for OAuth
+        upstream_body = _map_anthropic_to_chatgpt_backend(body, model_config.model)
+        # Note: ChatGPT backend doesn't use tool_id_map
     else:
-        # Convert to OpenAI format for OpenAI-compatible providers
+        # Convert to OpenAI format for standard OpenAI-compatible providers
         upstream_body, tool_id_map = _map_anthropic_request_to_openai(body)
         upstream_body["model"] = model_config.model
 
@@ -519,15 +640,23 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
                             errj = await r.json()
                         except Exception:
                             errj = {"message": await r.text()}
+                        
+                        # Log upstream errors for debugging
+                        print(f"❌ UPSTREAM ERROR {r.status}:")
+                        print(f"   Model: {model_config.model}")
+                        print(f"   Provider: {model_config.provider}")
+                        print(f"   URL: {url}")
+                        print(f"   Auth Method: {getattr(model_config, 'auth_method', 'default')}")
+                        print(f"   Error response: {json.dumps(errj, indent=2)[:1000]}")
+
+                        # emit an SSE-style error event so the client can handle it
+                        await resp.write(_sse_event("error", {
+                            "type": "error",
+                            "error": {"type": "api_error", "message": f"Upstream {r.status}: {errj}"}
+                        }))
                         await resp.write(_sse_event("message_stop", {}))
                         await resp.write_eof()
-                        return web.json_response({
-                            "type": "error",
-                            "error": {
-                                "type": "api_error",
-                                "message": f"Upstream {r.status}: {errj}"
-                            }
-                        }, status=502)
+                        return resp
 
                     if is_anthropic:
                         # Pass through native Anthropic SSE events
@@ -603,17 +732,25 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
                             errj = await r.json()
                         except Exception:
                             errj = {"message": await r.text()}
+                        
+                        # Log upstream errors for debugging
+                        print(f"❌ UPSTREAM ERROR {r.status}:")
+                        print(f"   Model: {model_config.model}")
+                        print(f"   Provider: {model_config.provider}")
+                        print(f"   URL: {url}")
+                        print(f"   Auth Method: {getattr(model_config, 'auth_method', 'default')}")
+                        print(f"   Error response: {json.dumps(errj, indent=2)[:1000]}")
                         return web.json_response({
                             "type": "error",
                             "error": {"type": "api_error", "message": f"Upstream {r.status}: {errj}"}
                         }, status=502)
 
                     j = await r.json()
-                    
+
                     if is_anthropic:
                         # Pass through native Anthropic response
                         return web.json_response(j)
-                    
+
                     # Convert OpenAI response to Anthropic format
                     choice = (j.get("choices") or [{}])[0]
                     msg = choice.get("message") or {}
@@ -681,6 +818,16 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
         except asyncio.CancelledError:
             raise
         except Exception as e:
+            # Log the full error details
+            import traceback
+            error_details = traceback.format_exc()
+            print(f"❌ PROXY ERROR 502: {str(e)}")
+            print(f"   Model: {model_config.model}")
+            print(f"   Provider: {model_config.provider}")
+            print(f"   URL: {url}")
+            print(f"   Auth Method: {getattr(model_config, 'auth_method', 'default')}")
+            print(f"   Full traceback:\n{error_details}")
+            
             # Map to Anthropic error shape
             return web.json_response({
                 "type": "error",
