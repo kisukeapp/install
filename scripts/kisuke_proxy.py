@@ -41,7 +41,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-from aiohttp import web, ClientSession, ClientTimeout, ClientResponse
+from aiohttp import web, ClientSession, ClientTimeout, ClientResponse, ClientConnectionResetError
 
 # =============================== Route Registry ===============================
 
@@ -661,7 +661,12 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
                     if is_anthropic:
                         # Pass through native Anthropic SSE events
                         async for event in _iter_anthropic_sse(r):
-                            await resp.write(event)
+                            try:
+                                await resp.write(event)
+                            except (ConnectionResetError, ClientConnectionResetError) as e:
+                                # Client disconnected, stop streaming
+                                print(f"⚠️ Client disconnected during streaming: {e}")
+                                break
                     else:
                         # Convert OpenAI SSE to Anthropic format
                         async for chunk in _iter_openai_sse(r):
@@ -672,12 +677,17 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
                             # Text deltas
                             txt = delta.get("content") or delta.get("text")
                             if txt:
-                                if not text_started:
-                                    await resp.write(_sse_event("content_block_start", {"index": 0, "type": "output_text"}))
-                                    text_started = True
-                                await resp.write(_sse_event("content_block_delta", {
-                                    "index": 0, "delta": {"type": "output_text_delta", "text": txt}
-                                }))
+                                try:
+                                    if not text_started:
+                                        await resp.write(_sse_event("content_block_start", {"index": 0, "type": "output_text"}))
+                                        text_started = True
+                                    await resp.write(_sse_event("content_block_delta", {
+                                        "index": 0, "delta": {"type": "output_text_delta", "text": txt}
+                                    }))
+                                except (ConnectionResetError, ClientConnectionResetError) as e:
+                                    # Client disconnected, stop streaming
+                                    print(f"⚠️ Client disconnected during OpenAI streaming: {e}")
+                                    break
 
                             # Tool calls deltas
                             tcd = delta.get("tool_calls")
@@ -697,7 +707,11 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
 
                         # Close text block if opened (only for OpenAI conversion)
                         if text_started:
-                            await resp.write(_sse_event("content_block_stop", {"index": 0}))
+                            try:
+                                await resp.write(_sse_event("content_block_stop", {"index": 0}))
+                            except (ConnectionResetError, ClientConnectionResetError) as e:
+                                print(f"⚠️ Client disconnected during OpenAI streaming finalization: {e}")
+                                return resp
 
                         # Emit finalized tool_use blocks (only for OpenAI conversion)
                         content_index = 1 if text_started else 0
@@ -710,18 +724,26 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
                                     args_json = {"_raw": tc["arguments"]}
                             tool_id = tc["id"] or f"tool_{uuid.uuid4().hex[:8]}"
                             tool_name = tc["name"] or "function"
-                            await resp.write(_sse_event("content_block_start", {
-                                "index": content_index,
-                                "type": "tool_use",
-                                "id": tool_id,
-                                "name": tool_name,
-                                "input": args_json
-                            }))
-                            await resp.write(_sse_event("content_block_stop", {"index": content_index}))
+                            try:
+                                await resp.write(_sse_event("content_block_start", {
+                                    "index": content_index,
+                                    "type": "tool_use",
+                                    "id": tool_id,
+                                    "name": tool_name,
+                                    "input": args_json
+                                }))
+                                await resp.write(_sse_event("content_block_stop", {"index": content_index}))
+                            except (ConnectionResetError, ClientConnectionResetError) as e:
+                                print(f"⚠️ Client disconnected during tool emission: {e}")
+                                return resp
                             content_index += 1
 
                         # Final stop (only for OpenAI conversion)
-                        await resp.write(_sse_event("message_stop", {}))
+                        try:
+                            await resp.write(_sse_event("message_stop", {}))
+                        except (ConnectionResetError, aiohttp.ClientConnectionResetError) as e:
+                            print(f"⚠️ Client disconnected during final stop: {e}")
+                            pass  # Already at the end, just return
                 return resp
 
             else:
