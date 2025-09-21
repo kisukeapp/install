@@ -418,6 +418,9 @@ class ClaudeSession:
     message_id_map: Dict[str, str] = field(default_factory=dict)  # iOS message ID -> Claude response ID
     pending_messages: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # Message ID -> message data
     last_user_message_id: Optional[str] = None  # Track last user message for response correlation
+    pending_responses: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # Response ID -> response data
+    response_counter: int = 0  # Counter for generating unique response IDs
+    response_retry_tasks: Dict[str, asyncio.Task] = field(default_factory=dict)  # Response ID -> retry task
 
     def ctx(self) -> Dict[str, Any]:
         """Generate context payload for outbound messages.
@@ -748,10 +751,15 @@ class KisukeBrokerSDK:
         if reactivated_sessions:
             await self._send(ws, {
                 "event": "system",
-                "type": "sessions_reactivated", 
+                "type": "sessions_reactivated",
                 "sessions": reactivated_sessions
             })
             log.info("Notified iOS about %d reactivated sessions", len(reactivated_sessions))
+
+            # Resume retries for all reactivated sessions
+            for session_info in reactivated_sessions:
+                session_id = session_info["session_id"]
+                await self._resume_response_retries(session_id)
 
         await self._send(ws, {"event": "system", "type": "request_routes", "session_id": "broker"})
 
@@ -956,6 +964,10 @@ class KisukeBrokerSDK:
                     # Handle resend request for unacknowledged messages
                     if session_id:
                         await self._handle_resend_message(session_id, msg.get("payload", {}))
+                case "response_ack":
+                    # Handle ACK for broker responses sent to iOS
+                    if session_id:
+                        await self._handle_response_ack(session_id, msg.get("payload", {}))
                 case _:
                     log.warning("Unknown iOS message: %s", msg)
         except Exception as e:
@@ -1472,16 +1484,31 @@ class KisukeBrokerSDK:
                         }
                     )
 
+            # Generate unique response ID for this message
+            session.response_counter += 1
+            response_id = f"resp_{session.session_id}_{session.response_counter}_{asyncio.get_event_loop().time()}"
+
             # Include all message fields including usage data
             message_data = {
                 "event": "stream",
                 "data": blocks,
+                "response_id": response_id,  # Add response ID for ACK tracking
                 **session.ctx()
             }
-            
+
             # Include correlation with user message if available
             if session.last_user_message_id:
-                message_data["user_message_id"] = session.last_user_message_id
+                message_data["in_response_to"] = session.last_user_message_id  # Use in_response_to for correlation
+
+            # Track pending response
+            session.pending_responses[response_id] = {
+                "timestamp": asyncio.get_event_loop().time(),
+                "type": "stream",
+                "in_response_to": session.last_user_message_id,
+                "status": "pending",
+                "data": message_data,  # Store the message for retries
+                "attempts": 0
+            }
 
             # Add message metadata if available
             message_info = {}
@@ -1493,6 +1520,9 @@ class KisukeBrokerSDK:
                 message_data["message"] = message_info
 
             await self._send(self.ios_websocket, message_data)
+
+            # Schedule retry for this response
+            await self._schedule_response_retry(session, response_id)
 
         elif isinstance(m, UserMessage):
             # Handle tool results that come back as UserMessages
@@ -1508,14 +1538,30 @@ class KisukeBrokerSDK:
                     tool_info = session.pending_tools.get(item.tool_use_id, {})
                     tool_name = tool_info.get("name", "unknown")
 
+                    # Generate response ID for tool result
+                    session.response_counter += 1
+                    tool_response_id = f"tool_{session.session_id}_{session.response_counter}_{asyncio.get_event_loop().time()}"
+
                     # Send individual tool result event
                     tool_result_event = {
                         "event": "tool_result",
+                        "response_id": tool_response_id,  # Add response ID
+                        "in_response_to": session.last_user_message_id,  # Correlate with user message
                         "tool_use_id": item.tool_use_id,
                         "tool_name": tool_name,
                         "content": item.content,
                         "is_error": item.is_error,
                         **session.ctx()
+                    }
+
+                    # Track pending response
+                    session.pending_responses[tool_response_id] = {
+                        "timestamp": asyncio.get_event_loop().time(),
+                        "type": "tool_result",
+                        "in_response_to": session.last_user_message_id,
+                        "status": "pending",
+                        "data": tool_result_event,  # Store for retries
+                        "attempts": 0
                     }
 
                     # Add error details if available
@@ -1526,6 +1572,9 @@ class KisukeBrokerSDK:
                         log.info("✅ Tool success for %s", tool_name)
 
                     await self._send(self.ios_websocket, tool_result_event)
+
+                    # Schedule retry for this response
+                    await self._schedule_response_retry(session, tool_response_id)
 
                     # Also emit tool completion event
                     await self._send(self.ios_websocket, {
@@ -1570,9 +1619,15 @@ class KisukeBrokerSDK:
             # Keep aggregate for backward compatibility
             session.used_tokens = session.last_usage["input_tokens"] + session.last_usage["output_tokens"]
 
+            # Generate unique response ID for result message
+            session.response_counter += 1
+            response_id = f"result_{session.session_id}_{session.response_counter}_{asyncio.get_event_loop().time()}"
+
             # Include all result fields
             result_data = {
                 "event": "result",
+                "response_id": response_id,  # Add response ID for ACK tracking
+                "in_response_to": session.last_user_message_id,  # Correlate with user message
                 "success": not m.is_error,
                 "is_error": m.is_error,
                 "total_cost_usd": m.total_cost_usd,
@@ -1584,7 +1639,21 @@ class KisukeBrokerSDK:
                 "usage": u,  # Include raw usage object
                 **session.ctx(),
             }
+
+            # Track pending response
+            session.pending_responses[response_id] = {
+                "timestamp": asyncio.get_event_loop().time(),
+                "type": "result",
+                "in_response_to": session.last_user_message_id,
+                "status": "pending",
+                "data": result_data,  # Store for retries
+                "attempts": 0
+            }
+
             await self._send(self.ios_websocket, result_data)
+
+            # Schedule retry for this response
+            await self._schedule_response_retry(session, response_id)
 
         elif isinstance(m, SystemMessage):
             # Include all system message fields
@@ -1825,25 +1894,53 @@ class KisukeBrokerSDK:
 
     async def _handle_sync_request(self, session_id: str, payload: Dict[str, Any]):
         """Handle sync request for missed messages from iOS client.
-        
+
         Args:
             session_id: ID of the session requesting sync.
             payload: Sync request data including last known message IDs.
         """
         log.info("Sync request for session %s: %s", session_id, payload)
-        
+
+        session = self.session_pool.get_session(session_id)
+        if not session:
+            log.warning("Sync request for unknown session %s", session_id)
+            return
+
+        # Find unacknowledged responses
+        missed_responses = []
+        for resp_id, resp_data in session.pending_responses.items():
+            if resp_data.get("status") == "pending":
+                missed_responses.append({
+                    "response_id": resp_id,
+                    "type": resp_data.get("type"),
+                    "in_response_to": resp_data.get("in_response_to"),
+                    "timestamp": resp_data.get("timestamp")
+                })
+
+        # Find unacknowledged messages from iOS
+        missed_messages = []
+        for msg_id, msg_data in session.pending_messages.items():
+            if msg_data.get("status") != "acknowledged":
+                missed_messages.append({
+                    "message_id": msg_id,
+                    "content": msg_data.get("content"),
+                    "timestamp": msg_data.get("timestamp")
+                })
+
         # Send sync response to iOS
         await self._send(self.ios_websocket, {
             "event": "sync_response",
             "session_id": session_id,
             "last_sent_message_id": payload.get("last_sent_message_id"),
             "last_received_message_id": payload.get("last_received_message_id"),
+            "missed_messages": missed_messages,  # Messages broker didn't ACK
+            "missed_responses": missed_responses,  # Responses iOS didn't ACK
             "status": "synced",
             "timestamp": asyncio.get_event_loop().time()
         })
-        
-        # If there are pending messages to resend, iOS will request them individually
-        log.debug("Sent sync response for session %s", session_id)
+
+        log.debug("Sent sync response for session %s with %d missed messages, %d missed responses",
+                 session_id, len(missed_messages), len(missed_responses))
 
     async def _handle_resend_message(self, session_id: str, payload: Dict[str, Any]):
         """Handle resend request for unacknowledged messages from iOS client.
@@ -1871,6 +1968,143 @@ class KisukeBrokerSDK:
         # Relay the message to Claude
         if content:
             await self._relay_user_message(session_id, content)
+
+    async def _handle_response_ack(self, session_id: str, payload: Dict[str, Any]):
+        """Handle ACK from iOS client for broker responses.
+
+        Args:
+            session_id: ID of the session sending the ACK.
+            payload: ACK data including response_id.
+        """
+        response_id = payload.get("response_id")
+        if not response_id:
+            log.warning("Response ACK missing response_id")
+            return
+
+        session = self.session_pool.get_session(session_id)
+        if not session:
+            log.warning("Response ACK for unknown session %s", session_id)
+            return
+
+        # Mark response as acknowledged
+        if response_id in session.pending_responses:
+            session.pending_responses[response_id]["status"] = "acknowledged"
+            session.pending_responses[response_id]["ack_time"] = asyncio.get_event_loop().time()
+            log.debug(f"Received ACK for response: {response_id}")
+
+            # Cancel retry task if exists
+            if response_id in session.response_retry_tasks:
+                session.response_retry_tasks[response_id].cancel()
+                del session.response_retry_tasks[response_id]
+                log.debug(f"Cancelled retry task for acknowledged response: {response_id}")
+
+            # Clean up old acknowledged responses (older than 5 minutes)
+            cutoff_time = asyncio.get_event_loop().time() - 300
+            to_remove = [rid for rid, resp in session.pending_responses.items()
+                        if resp.get("status") == "acknowledged" and
+                        resp.get("timestamp", 0) < cutoff_time]
+            for rid in to_remove:
+                del session.pending_responses[rid]
+                # Also clean up any lingering retry tasks
+                if rid in session.response_retry_tasks:
+                    session.response_retry_tasks[rid].cancel()
+                    del session.response_retry_tasks[rid]
+        else:
+            log.warning("ACK for unknown response ID: %s", response_id)
+
+    async def _schedule_response_retry(self, session: ClaudeSession, response_id: str):
+        """Schedule retry for unacknowledged response.
+
+        Args:
+            session: The Claude session.
+            response_id: ID of the response to retry.
+        """
+        # Cancel existing retry task if any
+        if response_id in session.response_retry_tasks:
+            session.response_retry_tasks[response_id].cancel()
+
+        async def retry_response():
+            """Retry sending response with exponential backoff."""
+            base_delay = 0.5  # Start with 500ms
+            max_delay = 20.0  # Cap at 20 seconds
+            multiplier = 1.5
+
+            while response_id in session.pending_responses:
+                response = session.pending_responses[response_id]
+
+                # Check if already acknowledged
+                if response.get("status") == "acknowledged":
+                    break
+
+                # Calculate delay with exponential backoff
+                attempts = response.get("attempts", 0)
+
+                # Only wait if this is not the first attempt (first attempt is immediate)
+                if attempts > 0:
+                    delay = min(base_delay * (multiplier ** attempts), max_delay)
+                    # Wait before retry
+                    await asyncio.sleep(delay)
+                else:
+                    # First attempt is immediate
+                    delay = 0
+
+                # Check again if acknowledged during wait
+                if response_id not in session.pending_responses or \
+                   session.pending_responses[response_id].get("status") == "acknowledged":
+                    break
+
+                # Check if iOS is still connected
+                if not self.ios_websocket or self.ios_websocket.closed:
+                    log.debug(f"iOS disconnected - pausing retry for response {response_id}")
+                    # Keep response pending but stop retrying until reconnection
+                    break
+
+                # Increment attempt count
+                session.pending_responses[response_id]["attempts"] = attempts + 1
+
+                # Resend the response
+                response_data = response.get("data")
+                if response_data:
+                    log.debug(f"Retrying response {response_id} (attempt #{attempts + 1}) after {delay:.1f}s")
+                    try:
+                        await self._send(self.ios_websocket, response_data)
+                    except Exception as e:
+                        log.debug(f"Failed to retry response {response_id}: {e}")
+                        # Will retry again on next iteration
+
+        # Create and store retry task
+        retry_task = asyncio.create_task(retry_response())
+        session.response_retry_tasks[response_id] = retry_task
+
+    async def _resume_response_retries(self, session_id: str):
+        """Resume retries for all pending responses when iOS reconnects.
+
+        Args:
+            session_id: ID of the session to resume retries for.
+        """
+        session = self.session_pool.get_session(session_id)
+        if not session:
+            return
+
+        pending_count = 0
+        for response_id, response in list(session.pending_responses.items()):
+            if response.get("status") == "pending":
+                pending_count += 1
+                # Send immediately - no delay on reconnection!
+                response_data = response.get("data")
+                if response_data and self.ios_websocket and not self.ios_websocket.closed:
+                    try:
+                        log.debug(f"⚡ Resending response {response_id} immediately on reconnection")
+                        await self._send(self.ios_websocket, response_data)
+                        # Then schedule future retries if needed
+                        await self._schedule_response_retry(session, response_id)
+                    except Exception as e:
+                        log.debug(f"Failed to resend response {response_id}: {e}")
+                        # Schedule retry on failure
+                        await self._schedule_response_retry(session, response_id)
+
+        if pending_count > 0:
+            log.info(f"⚡ Resent {pending_count} pending responses immediately for session {session_id}")
 
     async def _send(self, ws: WebSocketServerProtocol, obj: Dict[str, Any]):
         """Send JSON message to WebSocket client.
