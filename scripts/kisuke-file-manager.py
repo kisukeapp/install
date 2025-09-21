@@ -950,6 +950,166 @@ class RemoteFileManager:
                 'path': path
             }
     
+    def content_search(self, path, pattern, file_pattern=None, case_sensitive=False,
+                      max_results=1000, context_lines=2, ignore_patterns=None):
+        """
+        Search for content within files (for SearchPanel in code editor).
+        Optimized for code searching with better defaults.
+        """
+        try:
+            path = self.safe_path(path)
+            
+            cmd = [os.path.expanduser('~/.kisuke/bin/rg')]
+            cmd.extend(['--json', '--max-count', str(max_results)])
+            
+            # Show line numbers and context
+            cmd.append('-n')
+            if context_lines > 0:
+                cmd.extend(['-C', str(context_lines)])
+            
+            # Case sensitivity
+            if not case_sensitive:
+                cmd.append('-i')
+            
+            # File type filtering
+            if file_pattern:
+                cmd.extend(['-g', file_pattern])
+            
+            # Default ignore patterns for code search
+            default_ignores = ['node_modules', '.git', '*.pyc', '__pycache__', '.build', 'dist', 'build']
+            all_ignores = list(set(default_ignores + (ignore_patterns or [])))
+            for ignore in all_ignores:
+                cmd.extend(['--glob', f'!{ignore}'])
+            
+            # Add pattern and path
+            cmd.append(pattern)
+            cmd.append(path)
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            
+            if result.returncode not in [0, 1]:
+                return {
+                    'success': False,
+                    'error': f'Search failed: {result.stderr}'
+                }
+            
+            matches = []
+            for line in result.stdout.strip().split('\n'):
+                if not line:
+                    continue
+                    
+                try:
+                    data = json.loads(line)
+                    if data['type'] == 'match':
+                        match_data = data['data']
+                        
+                        matches.append({
+                            'path': match_data['path']['text'],
+                            'line_number': match_data.get('line_number'),
+                            'lines': match_data.get('lines', {}).get('text', ''),
+                            'column': match_data.get('column'),
+                        })
+                        
+                except json.JSONDecodeError:
+                    continue
+            
+            return {
+                'success': True,
+                'matches': matches,
+                'total': len(matches),
+                'search_type': 'content',
+                'pattern': pattern
+            }
+            
+        except Exception as e:
+            return {
+                'success': False,
+                'error': str(e)
+            }
+    
+    def file_name_search(self, path, pattern, fuzzy=True, case_sensitive=False, 
+                        max_results=100, ignore_patterns=None):
+        """
+        Search for files by name with optional fuzzy matching (for SearchPanel file mode).
+        """
+        try:
+            path = self.safe_path(path)
+            
+            # Get all files first
+            cmd = [os.path.expanduser('~/.kisuke/bin/rg'), '--files', '--hidden']
+            
+            # Ignore patterns
+            default_ignores = ['node_modules', '.git', 'dist', 'build']
+            all_ignores = list(set(default_ignores + (ignore_patterns or [])))
+            for ignore in all_ignores:
+                cmd.extend(['--glob', f'!{ignore}'])
+            
+            cmd.append(path)
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            
+            if result.returncode not in [0, 1]:
+                return {
+                    'success': False,
+                    'error': f'Failed to list files: {result.stderr}'
+                }
+            
+            matches = []
+            pattern_lower = pattern.lower() if not case_sensitive else pattern
+            
+            for file_path in result.stdout.strip().split('\n'):
+                if not file_path:
+                    continue
+                
+                filename = os.path.basename(file_path)
+                filename_check = filename.lower() if not case_sensitive else filename
+                
+                score = 0
+                if fuzzy:
+                    # Fuzzy matching
+                    if pattern_lower in filename_check:
+                        score = 100  # Exact substring match
+                    else:
+                        # Check if all pattern chars appear in order
+                        pattern_idx = 0
+                        for char in filename_check:
+                            if pattern_idx < len(pattern_lower) and char == pattern_lower[pattern_idx]:
+                                pattern_idx += 1
+                                score += 10
+                        
+                        if pattern_idx < len(pattern_lower):
+                            continue  # Didn't match all characters
+                else:
+                    # Exact substring match only
+                    if pattern_lower not in filename_check:
+                        continue
+                    score = 100
+                
+                matches.append({
+                    'path': file_path,
+                    'name': filename,
+                    'score': score,
+                    'type': 'file'
+                })
+            
+            # Sort by score and limit
+            matches.sort(key=lambda x: x['score'], reverse=True)
+            matches = matches[:max_results]
+            
+            return {
+                'success': True,
+                'matches': matches,
+                'total': len(matches),
+                'search_type': 'file_name',
+                'pattern': pattern
+            }
+            
+        except Exception as e:
+            return {
+                'success': False,
+                'error': str(e)
+            }
+    
     def ripgrep_search(self, path, pattern, file_pattern=None, case_sensitive=False, 
                       search_type='content', max_results=1000, context_lines=0,
                       ignore_patterns=None, follow_symlinks=False):
@@ -994,10 +1154,9 @@ class RemoteFileManager:
             
             # Configure search type (files or content)
             if search_type == 'files':
+                # For file name search, list all files then filter
                 cmd.append('--files')
-                if pattern:
-                    # Use pattern as glob filter for file search
-                    cmd.extend(['--glob', f'*{pattern}*'])
+                # Don't add pattern as glob here - we'll filter after
             else:
                 # Configure content search with context
                 if context_lines > 0:
@@ -1009,8 +1168,8 @@ class RemoteFileManager:
             
             # Add ignore patterns
             if ignore_patterns:
-                for pattern in ignore_patterns:
-                    cmd.extend(['--glob', f'!{pattern}'])
+                for ignore_pattern in ignore_patterns:
+                    cmd.extend(['--glob', f'!{ignore_pattern}'])
             
             # Enable symlink following if requested
             if follow_symlinks:
@@ -1033,39 +1192,65 @@ class RemoteFileManager:
                         'error': f'ripgrep error: {result.stderr}'
                     }
                 
-                # Parse JSON-formatted ripgrep output
+                # Parse output based on search type
                 matches = []
-                for line in result.stdout.strip().split('\n'):
-                    if not line:
-                        continue
-                    
-                    try:
-                        data = json.loads(line)
-                        if data['type'] == 'match':
-                            match_data = data['data']
-                            
-                            match_info = {
-                                'path': match_data['path']['text'],
-                                'line_number': match_data.get('line_number'),
-                                'lines': match_data.get('lines', {}).get('text', ''),
-                                'absolute_offset': match_data.get('absolute_offset'),
-                            }
-                            
-                            # Extract submatch positions and text
-                            if 'submatches' in match_data:
-                                submatches = []
-                                for submatch in match_data['submatches']:
-                                    submatches.append({
-                                        'start': submatch['start'],
-                                        'end': submatch['end'],
-                                        'text': submatch['match']['text']
-                                    })
-                                match_info['matches'] = submatches
-                            
-                            matches.append(match_info)
-                            
-                    except json.JSONDecodeError:
-                        continue
+                
+                if search_type == 'files':
+                    # For file search, output is plain text list of files
+                    for line in result.stdout.strip().split('\n'):
+                        if not line:
+                            continue
+                        
+                        # Filter by pattern if provided
+                        if pattern:
+                            filename = os.path.basename(line)
+                            # Case-insensitive search in filename
+                            if not case_sensitive:
+                                if pattern.lower() not in filename.lower():
+                                    continue
+                            else:
+                                if pattern not in filename:
+                                    continue
+                        
+                        matches.append({
+                            'path': line,
+                            'line_number': None,
+                            'lines': '',
+                            'absolute_offset': None,
+                        })
+                else:
+                    # For content search, output is JSON
+                    for line in result.stdout.strip().split('\n'):
+                        if not line:
+                            continue
+                        
+                        try:
+                            data = json.loads(line)
+                            if data['type'] == 'match':
+                                match_data = data['data']
+                                
+                                match_info = {
+                                    'path': match_data['path']['text'],
+                                    'line_number': match_data.get('line_number'),
+                                    'lines': match_data.get('lines', {}).get('text', ''),
+                                    'absolute_offset': match_data.get('absolute_offset'),
+                                }
+                                
+                                # Extract submatch positions and text
+                                if 'submatches' in match_data:
+                                    submatches = []
+                                    for submatch in match_data['submatches']:
+                                        submatches.append({
+                                            'start': submatch['start'],
+                                            'end': submatch['end'],
+                                            'text': submatch['match']['text']
+                                        })
+                                    match_info['matches'] = submatches
+                                
+                                matches.append(match_info)
+                                
+                        except json.JSONDecodeError:
+                            continue
                 
                 return {
                     'success': True,
@@ -2040,6 +2225,10 @@ def main():
             result = manager.generate_diff(**args)
         elif command == 'ripgrep':
             result = manager.ripgrep_search(**args)
+        elif command == 'content_search':
+            result = manager.content_search(**args)
+        elif command == 'file_name_search':
+            result = manager.file_name_search(**args)
         elif command == 'scan_projects':
             result = manager.scan_projects(**args)
         else:
