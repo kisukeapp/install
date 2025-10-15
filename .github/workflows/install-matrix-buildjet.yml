@@ -27,10 +27,8 @@ jobs:
           line="$(grep '^\[KECHO\] ALERT MISSING_DEPENDENCIES' install2.out || true)"
           pkgs_line="$(grep '^\[KECHO\] PACKAGES ' install2.out || true)"
           echo "$line"
-          # Strip markers to get raw token lists
-          missing="$(printf '%s\n' "$line" | sed -E 's/^\[KECHO\] ALERT MISSING_DEPENDENCIES[[:space:]]*//')"
-          pkgs="$(printf '%s\n' "$pkgs_line" | sed -E 's/^\[KECHO\] PACKAGES[[:space:]]*//')"
-          # Tokenize, unique-sort, and subtract package names from missing
+          missing="$(printf '%s\n' "$line" | awk '{ $1=""; $2=""; $3=""; sub(/^  +/,""); print }')"
+          pkgs="$(printf '%s\n' "$pkgs_line" | awk '{ $1=""; $2=""; sub(/^  +/,""); print }')"
           filtered=$(comm -23 <(printf '%s\n' $missing | sed '/^$/d' | sort -u) <(printf '%s\n' $pkgs | sed '/^$/d' | sort -u) || true)
           if [ -n "${filtered//$'\n'/ }" ]; then
             echo "Missing dependencies: $filtered" >&2
@@ -58,8 +56,8 @@ jobs:
           line="$(grep '^\[KECHO\] ALERT MISSING_DEPENDENCIES' install2.out || true)"
           pkgs_line="$(grep '^\[KECHO\] PACKAGES ' install2.out || true)"
           echo "$line"
-          missing="$(printf '%s\n' "$line" | sed -E 's/^\[KECHO\] ALERT MISSING_DEPENDENCIES[[:space:]]*//')"
-          pkgs="$(printf '%s\n' "$pkgs_line" | sed -E 's/^\[KECHO\] PACKAGES[[:space:]]*//')"
+          missing="$(printf '%s\n' "$line" | awk '{ $1=""; $2=""; $3=""; sub(/^  +/,""); print }')"
+          pkgs="$(printf '%s\n' "$pkgs_line" | awk '{ $1=""; $2=""; sub(/^  +/,""); print }')"
           filtered=$(comm -23 <(printf '%s\n' $missing | sed '/^$/d' | sort -u) <(printf '%s\n' $pkgs | sed '/^$/d' | sort -u) || true)
           if [ -n "${filtered//$'\n'/ }" ]; then
             echo "Missing dependencies: $filtered" >&2
@@ -87,8 +85,8 @@ jobs:
           line="$(grep '^\[KECHO\] ALERT MISSING_DEPENDENCIES' install2.out || true)"
           pkgs_line="$(grep '^\[KECHO\] PACKAGES ' install2.out || true)"
           echo "$line"
-          missing="$(printf '%s\n' "$line" | sed -E 's/^\[KECHO\] ALERT MISSING_DEPENDENCIES[[:space:]]*//')"
-          pkgs="$(printf '%s\n' "$pkgs_line" | sed -E 's/^\[KECHO\] PACKAGES[[:space:]]*//')"
+          missing="$(printf '%s\n' "$line" | awk '{ $1=""; $2=""; $3=""; sub(/^  +/,""); print }')"
+          pkgs="$(printf '%s\n' "$pkgs_line" | awk '{ $1=""; $2=""; sub(/^  +/,""); print }')"
           filtered=$(comm -23 <(printf '%s\n' $missing | sed '/^$/d' | sort -u) <(printf '%s\n' $pkgs | sed '/^$/d' | sort -u) || true)
           if [ -n "${filtered//$'\n'/ }" ]; then
             echo "Missing dependencies: $filtered" >&2
@@ -116,8 +114,8 @@ jobs:
           line="$(grep '^\[KECHO\] ALERT MISSING_DEPENDENCIES' install2.out || true)"
           pkgs_line="$(grep '^\[KECHO\] PACKAGES ' install2.out || true)"
           echo "$line"
-          missing="$(printf '%s\n' "$line" | sed -E 's/^\[KECHO\] ALERT MISSING_DEPENDENCIES[[:space:]]*//')"
-          pkgs="$(printf '%s\n' "$pkgs_line" | sed -E 's/^\[KECHO\] PACKAGES[[:space:]]*//')"
+          missing="$(printf '%s\n' "$line" | awk '{ $1=""; $2=""; $3=""; sub(/^  +/,""); print }')"
+          pkgs="$(printf '%s\n' "$pkgs_line" | awk '{ $1=""; $2=""; sub(/^  +/,""); print }')"
           filtered=$(comm -23 <(printf '%s\n' $missing | sed '/^$/d' | sort -u) <(printf '%s\n' $pkgs | sed '/^$/d' | sort -u) || true)
           if [ -n "${filtered//$'\n'/ }" ]; then
             echo "Missing dependencies: $filtered" >&2
