@@ -67,7 +67,7 @@ jobs:
 
   macos_arm64_14:
     name: macOS 14 (arm64)
-    runs-on: buildjet-8vcpu-macos-14
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
       - name: Prepare brew dependencies
@@ -96,7 +96,7 @@ jobs:
 
   macos_arm64_13:
     name: macOS 13 (arm64)
-    runs-on: buildjet-8vcpu-macos-13
+    runs-on: macos-13
     steps:
       - uses: actions/checkout@v4
       - name: Prepare brew dependencies
