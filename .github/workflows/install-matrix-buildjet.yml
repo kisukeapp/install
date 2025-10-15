@@ -27,9 +27,11 @@ jobs:
           line="$(grep '^\[KECHO\] ALERT MISSING_DEPENDENCIES' install2.out || true)"
           pkgs_line="$(grep '^\[KECHO\] PACKAGES ' install2.out || true)"
           echo "$line"
-          missing="${line#*[KECHO] ALERT MISSING_DEPENDENCIES }"
-          pkgs="${pkgs_line#*[KECHO] PACKAGES }"
-          filtered="$(printf '%s\n' $missing | grep -vxF -f <(printf '%s\n' $pkgs) || true)"
+          # Strip markers to get raw token lists
+          missing="$(printf '%s\n' "$line" | sed -E 's/^\[KECHO\] ALERT MISSING_DEPENDENCIES[[:space:]]*//')"
+          pkgs="$(printf '%s\n' "$pkgs_line" | sed -E 's/^\[KECHO\] PACKAGES[[:space:]]*//')"
+          # Tokenize, unique-sort, and subtract package names from missing
+          filtered=$(comm -23 <(printf '%s\n' $missing | sed '/^$/d' | sort -u) <(printf '%s\n' $pkgs | sed '/^$/d' | sort -u) || true)
           if [ -n "${filtered//$'\n'/ }" ]; then
             echo "Missing dependencies: $filtered" >&2
             exit 1
@@ -56,9 +58,9 @@ jobs:
           line="$(grep '^\[KECHO\] ALERT MISSING_DEPENDENCIES' install2.out || true)"
           pkgs_line="$(grep '^\[KECHO\] PACKAGES ' install2.out || true)"
           echo "$line"
-          missing="${line#*[KECHO] ALERT MISSING_DEPENDENCIES }"
-          pkgs="${pkgs_line#*[KECHO] PACKAGES }"
-          filtered="$(printf '%s\n' $missing | grep -vxF -f <(printf '%s\n' $pkgs) || true)"
+          missing="$(printf '%s\n' "$line" | sed -E 's/^\[KECHO\] ALERT MISSING_DEPENDENCIES[[:space:]]*//')"
+          pkgs="$(printf '%s\n' "$pkgs_line" | sed -E 's/^\[KECHO\] PACKAGES[[:space:]]*//')"
+          filtered=$(comm -23 <(printf '%s\n' $missing | sed '/^$/d' | sort -u) <(printf '%s\n' $pkgs | sed '/^$/d' | sort -u) || true)
           if [ -n "${filtered//$'\n'/ }" ]; then
             echo "Missing dependencies: $filtered" >&2
             exit 1
@@ -85,9 +87,9 @@ jobs:
           line="$(grep '^\[KECHO\] ALERT MISSING_DEPENDENCIES' install2.out || true)"
           pkgs_line="$(grep '^\[KECHO\] PACKAGES ' install2.out || true)"
           echo "$line"
-          missing="${line#*[KECHO] ALERT MISSING_DEPENDENCIES }"
-          pkgs="${pkgs_line#*[KECHO] PACKAGES }"
-          filtered="$(printf '%s\n' $missing | grep -vxF -f <(printf '%s\n' $pkgs) || true)"
+          missing="$(printf '%s\n' "$line" | sed -E 's/^\[KECHO\] ALERT MISSING_DEPENDENCIES[[:space:]]*//')"
+          pkgs="$(printf '%s\n' "$pkgs_line" | sed -E 's/^\[KECHO\] PACKAGES[[:space:]]*//')"
+          filtered=$(comm -23 <(printf '%s\n' $missing | sed '/^$/d' | sort -u) <(printf '%s\n' $pkgs | sed '/^$/d' | sort -u) || true)
           if [ -n "${filtered//$'\n'/ }" ]; then
             echo "Missing dependencies: $filtered" >&2
             exit 1
@@ -114,9 +116,9 @@ jobs:
           line="$(grep '^\[KECHO\] ALERT MISSING_DEPENDENCIES' install2.out || true)"
           pkgs_line="$(grep '^\[KECHO\] PACKAGES ' install2.out || true)"
           echo "$line"
-          missing="${line#*[KECHO] ALERT MISSING_DEPENDENCIES }"
-          pkgs="${pkgs_line#*[KECHO] PACKAGES }"
-          filtered="$(printf '%s\n' $missing | grep -vxF -f <(printf '%s\n' $pkgs) || true)"
+          missing="$(printf '%s\n' "$line" | sed -E 's/^\[KECHO\] ALERT MISSING_DEPENDENCIES[[:space:]]*//')"
+          pkgs="$(printf '%s\n' "$pkgs_line" | sed -E 's/^\[KECHO\] PACKAGES[[:space:]]*//')"
+          filtered=$(comm -23 <(printf '%s\n' $missing | sed '/^$/d' | sort -u) <(printf '%s\n' $pkgs | sed '/^$/d' | sort -u) || true)
           if [ -n "${filtered//$'\n'/ }" ]; then
             echo "Missing dependencies: $filtered" >&2
             exit 1
@@ -145,9 +147,9 @@ jobs:
           line="$(grep '^\[KECHO\] ALERT MISSING_DEPENDENCIES' install2.out || true)"
           pkgs_line="$(grep '^\[KECHO\] PACKAGES ' install2.out || true)"
           echo "$line"
-          missing="${line#*[KECHO] ALERT MISSING_DEPENDENCIES }"
-          pkgs="${pkgs_line#*[KECHO] PACKAGES }"
-          filtered="$(printf '%s\n' $missing | grep -vxF -f <(printf '%s\n' $pkgs) || true)"
+          missing="$(printf '%s\n' "$line" | sed -E 's/^\[KECHO\] ALERT MISSING_DEPENDENCIES[[:space:]]*//')"
+          pkgs="$(printf '%s\n' "$pkgs_line" | sed -E 's/^\[KECHO\] PACKAGES[[:space:]]*//')"
+          filtered=$(comm -23 <(printf '%s\n' $missing | sed '/^$/d' | sort -u) <(printf '%s\n' $pkgs | sed '/^$/d' | sort -u) || true)
           if [ -n "${filtered//$'\n'/ }" ]; then
             echo "Missing dependencies: $filtered" >&2
             exit 1
@@ -175,9 +177,9 @@ jobs:
           line="$(grep '^\[KECHO\] ALERT MISSING_DEPENDENCIES' install2.out || true)"
           pkgs_line="$(grep '^\[KECHO\] PACKAGES ' install2.out || true)"
           echo "$line"
-          missing="${line#*[KECHO] ALERT MISSING_DEPENDENCIES }"
-          pkgs="${pkgs_line#*[KECHO] PACKAGES }"
-          filtered="$(printf '%s\n' $missing | grep -vxF -f <(printf '%s\n' $pkgs) || true)"
+          missing="$(printf '%s\n' "$line" | sed -E 's/^\[KECHO\] ALERT MISSING_DEPENDENCIES[[:space:]]*//')"
+          pkgs="$(printf '%s\n' "$pkgs_line" | sed -E 's/^\[KECHO\] PACKAGES[[:space:]]*//')"
+          filtered=$(comm -23 <(printf '%s\n' $missing | sed '/^$/d' | sort -u) <(printf '%s\n' $pkgs | sed '/^$/d' | sort -u) || true)
           if [ -n "${filtered//$'\n'/ }" ]; then
             echo "Missing dependencies: $filtered" >&2
             exit 1
