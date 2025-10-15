@@ -69,9 +69,12 @@ for f in "${FILES_DIR}/dependencies"/*.sh; do
                 sed -E 's/^\s*(sudo\s+)?(apt-get|yum|dnf|pacman|zypper|brew|apk)\s+(install|add|-S)\s+//' |
                 tr -s ' ')
             for word in $pkgs; do
-                if [[ ! "$word" =~ ^- && ! "$word" =~ ^/ && "$word" != ">/dev/null" ]]; then
-                    dep_pkgs+=("$word")
-                fi
+                # filter flags, paths, and redirections/pipes
+                if [[ "$word" =~ ^- ]]; then continue; fi
+                if [[ "$word" =~ ^/ ]]; then continue; fi
+                if [[ "$word" == ">/dev/null" || "$word" == "2>&1" || "$word" == "|" || "$word" == "||" || "$word" == "&&" ]]; then continue; fi
+                if [[ "$word" =~ [\>&\|] ]]; then continue; fi
+                dep_pkgs+=("$word")
             done
         fi
     done < "$f"

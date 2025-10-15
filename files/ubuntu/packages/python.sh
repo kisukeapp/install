@@ -13,12 +13,19 @@ echo "[KECHO] Detected OS=$OS, ARCH=$ARCH"
 
 case "$OS" in
   linux)
+    # Detect musl (e.g., Alpine) vs glibc
+    libc_triple="unknown-linux-gnu"
+    if command -v ldd >/dev/null 2>&1 && ldd --version 2>&1 | grep -qi musl; then
+      libc_triple="unknown-linux-musl"
+    elif [[ -f /etc/alpine-release ]]; then
+      libc_triple="unknown-linux-musl"
+    fi
     case "$ARCH" in
       x86_64)
-        PYTHON_URL="https://github.com/astral-sh/python-build-standalone/releases/download/20250808/cpython-3.12.11+20250808-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
+        PYTHON_URL="https://github.com/astral-sh/python-build-standalone/releases/download/20250808/cpython-3.12.11+20250808-x86_64-${libc_triple}-install_only_stripped.tar.gz"
         ;;
       aarch64|arm64)
-        PYTHON_URL="https://github.com/astral-sh/python-build-standalone/releases/download/20250808/cpython-3.12.11+20250808-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz"
+        PYTHON_URL="https://github.com/astral-sh/python-build-standalone/releases/download/20250808/cpython-3.12.11+20250808-aarch64-${libc_triple}-install_only_stripped.tar.gz"
         ;;
       *)
         echo "Unsupported Linux architecture: $ARCH"
