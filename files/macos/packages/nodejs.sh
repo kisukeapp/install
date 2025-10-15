@@ -50,6 +50,8 @@ set -euo pipefail
 export NPM_CONFIG_PREFIX="$HOME/.kisuke/bin/nodejs"
 export NPM_CONFIG_CACHE="$HOME/.kisuke/npm-cache"
 export NPM_CONFIG_USERCONFIG="$HOME/.kisuke/npmrc"
+# Ensure local node is resolvable for JS shims using /usr/bin/env node
+export PATH="$HOME/.kisuke/bin:$HOME/.kisuke/bin/nodejs/bin:$PATH"
 exec "$HOME/.kisuke/bin/nodejs/bin/npm" "$@"
 EOF
 chmod +x "${BIN_DIR}/npm"
@@ -60,6 +62,8 @@ set -euo pipefail
 export NPM_CONFIG_PREFIX="$HOME/.kisuke/bin/nodejs"
 export NPM_CONFIG_CACHE="$HOME/.kisuke/npm-cache"
 export NPM_CONFIG_USERCONFIG="$HOME/.kisuke/npmrc"
+# Ensure local node is resolvable for JS shims using /usr/bin/env node
+export PATH="$HOME/.kisuke/bin:$HOME/.kisuke/bin/nodejs/bin:$PATH"
 exec "$HOME/.kisuke/bin/nodejs/bin/npx" "$@"
 EOF
 chmod +x "${BIN_DIR}/npx"
