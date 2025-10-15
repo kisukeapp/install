@@ -57,6 +57,14 @@ if ! curl -fSLO "https://nodejs.org/dist/${NODE_VERSION}/${NODE_DIST}"; then
       echo "[KECHO] ERROR Could not find Node v20 tarball for armv7l"
       exit 1
     fi
+  elif [[ -n "$MUSL_SUFFIX" ]]; then
+    echo "[KECHO] NOTIFY Trying unofficial musl build source"
+    if curl -fSLO "https://unofficial-builds.nodejs.org/download/release/${NODE_VERSION}/${NODE_DIST}"; then
+      :
+    else
+      echo "[KECHO] ERROR Failed to download Node tarball: ${NODE_DIST}"
+      exit 1
+    fi
   else
     echo "[KECHO] ERROR Failed to download Node tarball: ${NODE_DIST}"
     exit 1
