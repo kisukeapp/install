@@ -25,7 +25,6 @@ esac
 
 # Paths
 NODEJS_BIN_DIR="$BIN_DIR/nodejs/bin"
-export PATH="$BIN_DIR:$NODEJS_BIN_DIR:$PATH"
 
 # Allow architecture override from GitHub Actions
 if [[ -n "${OVERRIDE_ARCH:-}" ]]; then
@@ -188,13 +187,14 @@ for pkg_dir in $pkg_dirs; do
     echo "Archiving $pkg_dir (version: $PACKAGE_VERSION) into $tarname"
     (
         cd "$HOME"
-        if [ "$machine" = "mac" ]; then
+        if [ "$machine" = "mac" ] && command -v gtar >/dev/null 2>&1; then
             TAR_CMD="gtar"
         else
             TAR_CMD="tar"
         fi
         echo "Compressing archive (this may take a moment)..."
-        $TAR_CMD -cf "$tarname" -I "xz -3 -T2" ".kisuke/bin/${pkg_dir}"
+        # Use a portable pipe to xz to avoid -I flag incompatibilities
+        $TAR_CMD -cf - ".kisuke/bin/${pkg_dir}" | xz -3 -T2 > "$tarname"
     )
 done
 

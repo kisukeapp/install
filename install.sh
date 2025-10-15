@@ -8,8 +8,6 @@ if ! SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; then
     exit 1
 fi
 BIN_DIR="$HOME/.kisuke/bin"
-
-export PATH="${BIN_DIR}:${PATH}"
 export DEBIAN_FRONTEND=noninteractive
 
 if [ -f /etc/os-release ]; then
@@ -42,6 +40,9 @@ function is_installed() {
         arch)
             pacman -Q "$pkg" >/dev/null 2>&1 && return 0
             ;;
+        alpine)
+            apk info -e "$pkg" >/dev/null 2>&1 && return 0
+            ;;
         opensuse*|sles)
             zypper se -i "$pkg" >/dev/null 2>&1 && return 0
             ;;
@@ -55,11 +56,6 @@ function is_installed() {
 
 mkdir -p "${BIN_DIR}"
 
-if [[ ":$PATH:" != *":${BIN_DIR}:"* ]]; then
-    echo "Adding ${BIN_DIR} to PATH"
-    export PATH="${BIN_DIR}:${PATH}"
-fi
-
 echo "[KECHO] DEV_ENVIRONMENT $DISTRO"
 
 dep_pkgs=()
@@ -68,9 +64,9 @@ shopt -s nullglob
 
 for f in "${FILES_DIR}/dependencies"/*.sh; do
     while IFS= read -r line; do
-        if [[ "$line" =~ ^[[:space:]]*(sudo[[:space:]]+)?(apt-get|yum|dnf|pacman|zypper|brew)[[:space:]]+(install|add|-S) ]]; then
+        if [[ "$line" =~ ^[[:space:]]*(sudo[[:space:]]+)?(apt-get|yum|dnf|pacman|zypper|brew|apk)[[:space:]]+(install|add|-S) ]]; then
             pkgs=$(echo "$line" |
-                sed -E 's/^\s*(sudo\s+)?(apt-get|yum|dnf|pacman|zypper|brew)\s+(install|add|-S)\s+//' |
+                sed -E 's/^\s*(sudo\s+)?(apt-get|yum|dnf|pacman|zypper|brew|apk)\s+(install|add|-S)\s+//' |
                 tr -s ' ')
             for word in $pkgs; do
                 if [[ ! "$word" =~ ^- && ! "$word" =~ ^/ && "$word" != ">/dev/null" ]]; then

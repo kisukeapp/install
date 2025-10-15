@@ -16,8 +16,8 @@ get_expected_version() {
     case "$1" in
         nodejs) echo "22.9.0" ;;
         python3) echo "3.12.11" ;;
-        claude_sdk) echo "0.0.19" ;;
-        claude_cli) echo "1.0.71" ;;
+        claude_sdk) echo "0.1.3" ;;
+        claude_cli) echo "2.0.14" ;;
         jq) echo "1.7.1" ;;
         ripgrep) echo "14.1.1" ;;
         websockets) echo "15.0.1" ;;
@@ -295,7 +295,7 @@ get_version() {
             if [[ -x "$BIN_DIR/python3/bin/pip" ]]; then
                 # Use a temporary file to avoid command substitution issues in Bash 3.2
                 local temp_pip_output="/tmp/pip_show_$"
-                if "$BIN_DIR/python3/bin/pip" show claude-code-sdk >"$temp_pip_output" 2>/dev/null; then
+                if "$BIN_DIR/python3/bin/pip" show claude-agent-sdk >"$temp_pip_output" 2>/dev/null; then
                     ver=$(awk '/^Version:/ {print $2}' "$temp_pip_output" 2>/dev/null)
                 else
                     ver="unknown"
@@ -343,15 +343,36 @@ create_symlinks() {
         nodejs)
             local node_bin_dir="$BIN_DIR/nodejs/bin"
             if [[ -d "$node_bin_dir" ]]; then
-                for binary in node npm npx; do
-                    if [[ -x "$node_bin_dir/$binary" ]]; then
-                        if ln -sf "$node_bin_dir/$binary" "$BIN_DIR/$binary"; then
-                            log NOTIFY "Created symlink: $binary -> $node_bin_dir/$binary"
-                        else
-                            log ERROR "Failed to create symlink: $binary -> $node_bin_dir/$binary"
-                        fi
+                # Always link node
+                if [[ -x "$node_bin_dir/node" ]]; then
+                    if ln -sf "$node_bin_dir/node" "$BIN_DIR/node"; then
+                        log NOTIFY "Created symlink: node -> $node_bin_dir/node"
+                    else
+                        log ERROR "Failed to create symlink: node -> $node_bin_dir/node"
                     fi
-                done
+                fi
+                # Create npm/npx wrappers to enforce isolated prefix/cache
+                cat > "$BIN_DIR/npm" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+export NPM_CONFIG_PREFIX="$HOME/.kisuke/bin/nodejs"
+export NPM_CONFIG_CACHE="$HOME/.kisuke/npm-cache"
+export NPM_CONFIG_USERCONFIG="$HOME/.kisuke/npmrc"
+exec "$HOME/.kisuke/bin/nodejs/bin/npm" "$@"
+EOF
+                chmod +x "$BIN_DIR/npm"
+
+                cat > "$BIN_DIR/npx" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+export NPM_CONFIG_PREFIX="$HOME/.kisuke/bin/nodejs"
+export NPM_CONFIG_CACHE="$HOME/.kisuke/npm-cache"
+export NPM_CONFIG_USERCONFIG="$HOME/.kisuke/npmrc"
+exec "$HOME/.kisuke/bin/nodejs/bin/npx" "$@"
+EOF
+                chmod +x "$BIN_DIR/npx"
+
+                # Link claude CLI if present
                 if [[ -x "$node_bin_dir/claude" ]]; then
                     if ln -sf "$node_bin_dir/claude" "$BIN_DIR/claude"; then
                         log NOTIFY "Created symlink: claude -> $node_bin_dir/claude"
@@ -413,6 +434,16 @@ remove_symlinks() {
             log NOTIFY "Removed symlink: $binary"
         fi
     done
+
+    # Clean up npm/npx wrappers for nodejs package
+    if [[ "$pkg" == "nodejs" ]]; then
+        for f in npm npx; do
+            if [[ -f "$BIN_DIR/$f" && ! -L "$BIN_DIR/$f" ]]; then
+                rm -f "$BIN_DIR/$f"
+                log NOTIFY "Removed wrapper: $f"
+            fi
+        done
+    fi
 }
 
 
@@ -825,24 +856,24 @@ install_claude_tools() {
             if ! aio_ver=$(get_expected_version aiohttp); then
                 aio_ver="3.11.11"
             fi
-            if "$BIN_DIR/python3/bin/pip" install --force-reinstall --disable-pip-version-check --no-input -q "websockets==$ws_ver" "uvloop==$uv_ver" "aiohttp==$aio_ver" "claude-code-sdk==$SDK_VER"; then
+            if "$BIN_DIR/python3/bin/pip" install --force-reinstall --disable-pip-version-check --no-input -q "websockets==$ws_ver" "uvloop==$uv_ver" "aiohttp==$aio_ver" "claude-agent-sdk==$SDK_VER"; then
                 cache_set "claude_sdk" "$SDK_VER"
-                log OK "claude-code-sdk installed v$SDK_VER"
+                log OK "claude-agent-sdk installed v$SDK_VER"
             else
-                log ERROR "claude-code-sdk install failed"
+                log ERROR "claude-agent-sdk install failed"
                 sdk_status=1
             fi
         else
-            log OK "claude-code-sdk up-to-date v$current_sdk"
+            log OK "claude-agent-sdk up-to-date v$current_sdk"
         fi
     else
-        log NOTIFY "pip not found, skipping claude-code-sdk"
+        log NOTIFY "pip not found, skipping claude-agent-sdk"
         sdk_status=1
     fi
     if [[ -x "$NODEJS_BIN_DIR/npm" ]]; then
         local CLI_VER
         if ! CLI_VER=$(get_expected_version claude_cli); then
-            CLI_VER="1.0.71"
+            CLI_VER="2.0.14"
         fi
         local current_cli
         if ! current_cli=$(get_version claude_cli); then
@@ -850,7 +881,7 @@ install_claude_tools() {
         fi
         
         if [[ "$current_cli" != "$CLI_VER" ]]; then
-            if "$NODEJS_BIN_DIR/npm" install -g "@anthropic-ai/claude-code@$CLI_VER" >/dev/null 2>&1; then
+            if NPM_CONFIG_PREFIX="$BIN_DIR/nodejs" NPM_CONFIG_CACHE="$HOME/.kisuke/npm-cache" NPM_CONFIG_USERCONFIG="$HOME/.kisuke/npmrc" "$NODEJS_BIN_DIR/npm" install -g "@anthropic-ai/claude-code@$CLI_VER" >/dev/null 2>&1; then
                 cache_set "claude_cli" "$CLI_VER"
                 create_symlinks claude
                 log OK "@anthropic-ai/claude-code installed v$CLI_VER"
@@ -1204,7 +1235,7 @@ handle_install() {
                             esac
                             ;;
                         *)
-                            log NOTIFY "claude-code-sdk requires Python. Installing..."
+                            log NOTIFY "claude-agent-sdk requires Python. Installing..."
                             processed_packages="$processed_packages:python3"
                             if install_binary_package python3; then
                                 if verify_installation python3; then
@@ -1216,8 +1247,8 @@ handle_install() {
                                     deps_ok=0
                                 fi
                             else
-                                log ERROR "Failed to install python3 dependency for claude-code-sdk"
-                                [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR Failed to install python - required for claude-code-sdk"
+                                log ERROR "Failed to install python3 dependency for claude-agent-sdk"
+                                [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR Failed to install python - required for claude-agent-sdk"
                                 failed_packages="$failed_packages python3"
                                 deps_ok=0
                             fi
@@ -1524,7 +1555,7 @@ handle_uninstall() {
                 ;;
             claude)
                 remove_symlinks claude
-                [[ -x "$BIN_DIR/python3/bin/pip" ]] && "$BIN_DIR/python3/bin/pip" uninstall -y claude-code-sdk >/dev/null 2>&1 && removed=true
+                [[ -x "$BIN_DIR/python3/bin/pip" ]] && "$BIN_DIR/python3/bin/pip" uninstall -y claude-agent-sdk >/dev/null 2>&1 && removed=true
                 [[ -x "$NODEJS_BIN_DIR/npm" ]] && "$NODEJS_BIN_DIR/npm" uninstall -g "@anthropic-ai/claude-code" >/dev/null 2>&1 && removed=true
                 cache_remove "claude_sdk"
                 cache_remove "claude_cli"

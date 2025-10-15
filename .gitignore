@@ -2,3 +2,15 @@
 venv*
 *.log
 *.zip
+
+tests/test_keys.py
+tests/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Ignore .md files except in root
+**/*.md
+!/*.md

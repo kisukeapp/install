@@ -1,0 +1,186 @@
+name: Install Checks (BuildJet)
+
+on:
+  push:
+    branches: ["beta"]
+
+jobs:
+  ubuntu_x64:
+    name: Ubuntu 22.04 (x64)
+    runs-on: buildjet-2vcpu-ubuntu-2204
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential curl xz-utils
+      - name: Run install.sh and capture output
+        run: |
+          bash install.sh | tee install.out
+      - name: Assert no missing dependencies
+        run: |
+          set -euo pipefail
+          line="$(grep '^\[KECHO\] ALERT MISSING_DEPENDENCIES' install.out || true)"
+          echo "$line"
+          missing="${line#*[KECHO] ALERT MISSING_DEPENDENCIES }"
+          missing="$(echo "$missing" | xargs || true)"
+          if [ -n "$missing" ]; then
+            echo "Missing dependencies: $missing" >&2
+            exit 1
+          fi
+          echo "All dependencies satisfied"
+
+  ubuntu_arm64:
+    name: Ubuntu 22.04 (arm64)
+    runs-on: buildjet-2vcpu-ubuntu-2204-arm64
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential curl xz-utils
+      - name: Run install.sh and capture output
+        run: |
+          bash install.sh | tee install.out
+      - name: Assert no missing dependencies
+        run: |
+          set -euo pipefail
+          line="$(grep '^\[KECHO\] ALERT MISSING_DEPENDENCIES' install.out || true)"
+          echo "$line"
+          missing="${line#*[KECHO] ALERT MISSING_DEPENDENCIES }"
+          missing="$(echo "$missing" | xargs || true)"
+          if [ -n "$missing" ]; then
+            echo "Missing dependencies: $missing" >&2
+            exit 1
+          fi
+          echo "All dependencies satisfied"
+
+  macos_arm64_14:
+    name: macOS 14 (arm64)
+    runs-on: buildjet-8vcpu-macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare brew dependencies
+        run: |
+          brew update
+          brew install icu4c pkg-config zlib xz libffi openssl@3 || true
+      - name: Run install.sh and capture output
+        run: |
+          bash install.sh | tee install.out
+      - name: Assert no missing dependencies
+        run: |
+          set -euo pipefail
+          line="$(grep '^\[KECHO\] ALERT MISSING_DEPENDENCIES' install.out || true)"
+          echo "$line"
+          missing="${line#*[KECHO] ALERT MISSING_DEPENDENCIES }"
+          missing="$(echo "$missing" | xargs || true)"
+          if [ -n "$missing" ]; then
+            echo "Missing dependencies: $missing" >&2
+            exit 1
+          fi
+          echo "All dependencies satisfied"
+
+  macos_arm64_13:
+    name: macOS 13 (arm64)
+    runs-on: buildjet-8vcpu-macos-13
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare brew dependencies
+        run: |
+          brew update
+          brew install icu4c pkg-config zlib xz libffi openssl@3 || true
+      - name: Run install.sh and capture output
+        run: |
+          bash install.sh | tee install.out
+      - name: Assert no missing dependencies
+        run: |
+          set -euo pipefail
+          line="$(grep '^\[KECHO\] ALERT MISSING_DEPENDENCIES' install.out || true)"
+          echo "$line"
+          missing="${line#*[KECHO] ALERT MISSING_DEPENDENCIES }"
+          missing="$(echo "$missing" | xargs || true)"
+          if [ -n "$missing" ]; then
+            echo "Missing dependencies: $missing" >&2
+            exit 1
+          fi
+          echo "All dependencies satisfied"
+
+  debian_container:
+    name: Debian 12 container
+    runs-on: buildjet-2vcpu-ubuntu-2204
+    container: debian:12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare container
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq sudo curl xz-utils ca-certificates git bash
+          update-ca-certificates || true
+      - name: Run install.sh and capture output
+        run: |
+          bash install.sh | tee install.out
+      - name: Assert no missing dependencies
+        run: |
+          set -euo pipefail
+          line="$(grep '^\[KECHO\] ALERT MISSING_DEPENDENCIES' install.out || true)"
+          echo "$line"
+          missing="${line#*[KECHO] ALERT MISSING_DEPENDENCIES }"
+          missing="$(echo "$missing" | xargs || true)"
+          if [ -n "$missing" ]; then
+            echo "Missing dependencies: $missing" >&2
+            exit 1
+          fi
+          echo "All dependencies satisfied"
+
+  arch_container:
+    name: Arch Linux container
+    runs-on: buildjet-2vcpu-ubuntu-2204
+    container: archlinux:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare container
+        run: |
+          pacman -Sy --noconfirm
+          pacman -S --noconfirm sudo curl xz git base-devel
+      - name: Run install.sh and capture output
+        run: |
+          bash install.sh | tee install.out
+      - name: Assert no missing dependencies
+        run: |
+          set -euo pipefail
+          line="$(grep '^\[KECHO\] ALERT MISSING_DEPENDENCIES' install.out || true)"
+          echo "$line"
+          missing="${line#*[KECHO] ALERT MISSING_DEPENDENCIES }"
+          missing="$(echo "$missing" | xargs || true)"
+          if [ -n "$missing" ]; then
+            echo "Missing dependencies: $missing" >&2
+            exit 1
+          fi
+          echo "All dependencies satisfied"
+
+  alpine_container:
+    name: Alpine 3.19 container
+    runs-on: buildjet-2vcpu-ubuntu-2204
+    container: alpine:3.19
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare container
+        run: |
+          apk add --no-cache sudo curl xz tar git bash
+      - name: Run install.sh and capture output
+        shell: bash
+        run: |
+          bash install.sh | tee install.out
+      - name: Assert no missing dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          line="$(grep '^\[KECHO\] ALERT MISSING_DEPENDENCIES' install.out || true)"
+          echo "$line"
+          missing="${line#*[KECHO] ALERT MISSING_DEPENDENCIES }"
+          missing="$(echo "$missing" | xargs || true)"
+          if [ -n "$missing" ]; then
+            echo "Missing dependencies: $missing" >&2
+            exit 1
+          fi
+          echo "All dependencies satisfied"
