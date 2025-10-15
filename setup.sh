@@ -1443,39 +1443,26 @@ deploy_scripts() {
     local deployed_count=0
     local failed_count=0
 
-    for script in "$extracted_scripts_dir"/*.py; do
-        if [[ -f "$script" ]]; then
-            local script_name
-            if ! script_name=$(basename "$script"); then
-                log ERROR "Failed to get basename of $script"
-                continue
-            fi
-            if cp "$script" "$SCRIPTS_DIR/$script_name" && chmod +x "$SCRIPTS_DIR/$script_name"; then
-                log NOTIFY "Deployed $script_name"
-                deployed_count=$((deployed_count + 1))
-            else
-                log ERROR "Failed to deploy $script_name"
-                failed_count=$((failed_count + 1))
-            fi
+    log NOTIFY "Deploying scripts recursively..."
+    while IFS= read -r -d '' script; do
+        local relative_path="${script#$extracted_scripts_dir/}"
+        local target_path="$SCRIPTS_DIR/$relative_path"
+        local target_dir
+        target_dir=$(dirname "$target_path")
+        if ! mkdir -p "$target_dir"; then
+            log ERROR "Failed to create directory $target_dir"
+            failed_count=$((failed_count + 1))
+            continue
         fi
-    done
-
-    for script in "$extracted_scripts_dir"/*; do
-        if [[ -f "$script" && ! "$script" == *.py ]]; then
-            local script_name
-            if ! script_name=$(basename "$script"); then
-                log ERROR "Failed to get basename of $script"
-                continue
-            fi
-            if cp "$script" "$SCRIPTS_DIR/$script_name" && chmod +x "$SCRIPTS_DIR/$script_name"; then
-                log NOTIFY "Deployed $script_name"
-                deployed_count=$((deployed_count + 1))
-            else
-                log ERROR "Failed to deploy $script_name"
-                failed_count=$((failed_count + 1))
-            fi
+        
+        if cp "$script" "$target_path" && chmod +x "$target_path"; then
+            log NOTIFY "Deployed $relative_path"
+            deployed_count=$((deployed_count + 1))
+        else
+            log ERROR "Failed to deploy $relative_path"
+            failed_count=$((failed_count + 1))
         fi
-    done
+    done < <(find "$extracted_scripts_dir" -type f -print0)
     
     if [[ $failed_count -eq 0 ]]; then
         log OK "Scripts deployed successfully ($deployed_count scripts)"
