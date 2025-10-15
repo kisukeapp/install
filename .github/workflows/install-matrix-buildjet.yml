@@ -206,9 +206,11 @@ jobs:
           line="$(grep '^\[KECHO\] ALERT MISSING_DEPENDENCIES' install2.out || true)"
           pkgs_line="$(grep '^\[KECHO\] PACKAGES ' install2.out || true)"
           echo "$line"
-          missing="${line#*[KECHO] ALERT MISSING_DEPENDENCIES }"
-          pkgs="${pkgs_line#*[KECHO] PACKAGES }"
-          filtered="$(printf '%s\n' $missing | grep -vxF -f <(printf '%s\n' $pkgs) || true)"
+          # Drop markers robustly with awk
+          missing="$(printf '%s\n' "$line" | awk '{ $1=""; $2=""; $3=""; sub(/^  +/,""); print }')"
+          pkgs="$(printf '%s\n' "$pkgs_line" | awk '{ $1=""; $2=""; sub(/^  +/,""); print }')"
+          # Subtract package names from missing deps
+          filtered=$(comm -23 <(printf '%s\n' $missing | sed '/^$/d' | sort -u) <(printf '%s\n' $pkgs | sed '/^$/d' | sort -u) || true)
           if [ -n "${filtered//$'\n'/ }" ]; then
             echo "Missing dependencies: $filtered" >&2
             exit 1
