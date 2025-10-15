@@ -72,7 +72,7 @@ for f in "${FILES_DIR}/dependencies"/*.sh; do
                 # filter flags, paths, and redirections/pipes
                 if [[ "$word" =~ ^- ]]; then continue; fi
                 if [[ "$word" =~ ^/ ]]; then continue; fi
-                if [[ "$word" == ">/dev/null" || "$word" == "2>&1" || "$word" == "|" || "$word" == "||" || "$word" == "&&" ]]; then continue; fi
+                if [[ "$word" == ">/dev/null" || "$word" == "2>&1" || "$word" == "|" || "$word" == "||" || "$word" == "&&" || "$word" == "true" ]]; then continue; fi
                 dep_pkgs+=("$word")
             done
         fi
