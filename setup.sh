@@ -776,8 +776,15 @@ download_and_extract() {
     
     log NOTIFY "Downloading $filename..."
     
-    if curl -sSL "$download_url" -o "$filename" &&
-       tar -xJf "$filename" -C "$HOME"; then
+    local temp_dir
+    if ! temp_dir=$(mktemp -d /tmp/kisuke.XXXXXX); then
+        log ERROR "Failed to create temporary directory"
+        return 1
+    fi
+    trap "rm -rf '$temp_dir'; trap - RETURN" RETURN
+    
+    if curl -sSL "$download_url" -o "$temp_dir/$filename" &&
+       tar -xJf "$temp_dir/$filename" -C "$HOME"; then
         echo "installed" > "$INSTALL_MARKER_DIR/$pkg.installed"
         local pkg_version
         if ! pkg_version=$(get_expected_version "$pkg"); then
@@ -815,7 +822,7 @@ install_binary_package() {
     # In dev mode, fallback to old naming scheme
     if [[ "$KISUKE_VERSION" == "INJECT_VERSION_HERE" ]]; then
         # Dev mode - this will change
-        KISUKE_VERSION="0.0.1"
+        KISUKE_VERSION="0.0.2"
         # kisuke-3.12.11-mac-arm64-python3.tar.xz
         # kisuke-0.0.1-python3-3.12.11-mac-x86_64.tar.xz
         if [[ "$DISTRO" == "alpine" ]]; then
@@ -1484,7 +1491,14 @@ copy_setup_script() {
     # Always download from release to ensure we get the version-injected script
     local url="https://github.com/${REPO}/releases/download/${KISUKE_VERSION}/setup.sh"
     
-    if curl -sSL -o "$setup_dest" "$url"; then
+    local temp_dir
+    if ! temp_dir=$(mktemp -d /tmp/kisuke.XXXXXX); then
+        log ERROR "Failed to create temporary directory"
+        return 1
+    fi
+    trap "rm -rf '$temp_dir'; trap - RETURN" RETURN
+    
+    if curl -sSL -o "$temp_dir/setup.sh" "$url" && cp "$temp_dir/setup.sh" "$setup_dest"; then
         chmod +x "$setup_dest"
         log OK "setup.sh saved to $setup_dest"
     else
