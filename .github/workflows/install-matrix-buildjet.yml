@@ -1,0 +1,218 @@
+name: Install Checks (BuildJet)
+
+on:
+  push:
+    branches: ["beta"]
+  pull_request:
+    branches: ["beta"]
+
+jobs:
+  ubuntu_x64:
+    name: Ubuntu 22.04 (x64)
+    runs-on: buildjet-2vcpu-ubuntu-2204
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential curl xz-utils
+      - name: Install packages (Node/Python)
+        run: bash package.sh
+      - name: Re-run install checks and capture output
+        run: bash install.sh | tee install2.out
+      - name: Assert no missing dependencies (exclude packages)
+        shell: bash
+        run: |
+          set -euo pipefail
+          line="$(grep '^\[KECHO\] ALERT MISSING_DEPENDENCIES' install2.out || true)"
+          pkgs_line="$(grep '^\[KECHO\] PACKAGES ' install2.out || true)"
+          echo "$line"
+          missing="$(printf '%s\n' "$line" | awk '{ $1=""; $2=""; $3=""; sub(/^  +/,""); print }')"
+          pkgs="$(printf '%s\n' "$pkgs_line" | awk '{ $1=""; $2=""; sub(/^  +/,""); print }')"
+          filtered=$(comm -23 <(printf '%s\n' $missing | sed '/^$/d' | sort -u) <(printf '%s\n' $pkgs | sed '/^$/d' | sort -u) || true)
+          if [ -n "${filtered//$'\n'/ }" ]; then
+            echo "Missing dependencies: $filtered" >&2
+            exit 1
+          fi
+          echo "All dependencies satisfied"
+
+  ubuntu_arm64:
+    name: Ubuntu 22.04 (arm64)
+    runs-on: buildjet-2vcpu-ubuntu-2204-arm64
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential curl xz-utils
+      - name: Install packages (Node/Python)
+        run: bash package.sh
+      - name: Re-run install checks and capture output
+        run: bash install.sh | tee install2.out
+      - name: Assert no missing dependencies (exclude packages)
+        shell: bash
+        run: |
+          set -euo pipefail
+          line="$(grep '^\[KECHO\] ALERT MISSING_DEPENDENCIES' install2.out || true)"
+          pkgs_line="$(grep '^\[KECHO\] PACKAGES ' install2.out || true)"
+          echo "$line"
+          missing="$(printf '%s\n' "$line" | awk '{ $1=""; $2=""; $3=""; sub(/^  +/,""); print }')"
+          pkgs="$(printf '%s\n' "$pkgs_line" | awk '{ $1=""; $2=""; sub(/^  +/,""); print }')"
+          filtered=$(comm -23 <(printf '%s\n' $missing | sed '/^$/d' | sort -u) <(printf '%s\n' $pkgs | sed '/^$/d' | sort -u) || true)
+          if [ -n "${filtered//$'\n'/ }" ]; then
+            echo "Missing dependencies: $filtered" >&2
+            exit 1
+          fi
+          echo "All dependencies satisfied"
+
+  macos_arm64_14:
+    name: macOS 14 (arm64)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare brew dependencies
+        run: |
+          brew update
+          brew install icu4c pkg-config zlib xz libffi openssl@3 || true
+      - name: Install packages (Node/Python)
+        run: bash package.sh
+      - name: Re-run install checks and capture output
+        run: bash install.sh | tee install2.out
+      - name: Assert no missing dependencies (exclude packages)
+        shell: bash
+        run: |
+          set -euo pipefail
+          line="$(grep '^\[KECHO\] ALERT MISSING_DEPENDENCIES' install2.out || true)"
+          pkgs_line="$(grep '^\[KECHO\] PACKAGES ' install2.out || true)"
+          echo "$line"
+          missing="$(printf '%s\n' "$line" | awk '{ $1=""; $2=""; $3=""; sub(/^  +/,""); print }')"
+          pkgs="$(printf '%s\n' "$pkgs_line" | awk '{ $1=""; $2=""; sub(/^  +/,""); print }')"
+          filtered=$(comm -23 <(printf '%s\n' $missing | sed '/^$/d' | sort -u) <(printf '%s\n' $pkgs | sed '/^$/d' | sort -u) || true)
+          if [ -n "${filtered//$'\n'/ }" ]; then
+            echo "Missing dependencies: $filtered" >&2
+            exit 1
+          fi
+          echo "All dependencies satisfied"
+
+  macos_arm64_13:
+    name: macOS 13 (arm64)
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare brew dependencies
+        run: |
+          brew update
+          brew install icu4c pkg-config zlib xz libffi openssl@3 || true
+      - name: Install packages (Node/Python)
+        run: bash package.sh
+      - name: Re-run install checks and capture output
+        run: bash install.sh | tee install2.out
+      - name: Assert no missing dependencies (exclude packages)
+        shell: bash
+        run: |
+          set -euo pipefail
+          line="$(grep '^\[KECHO\] ALERT MISSING_DEPENDENCIES' install2.out || true)"
+          pkgs_line="$(grep '^\[KECHO\] PACKAGES ' install2.out || true)"
+          echo "$line"
+          missing="$(printf '%s\n' "$line" | awk '{ $1=""; $2=""; $3=""; sub(/^  +/,""); print }')"
+          pkgs="$(printf '%s\n' "$pkgs_line" | awk '{ $1=""; $2=""; sub(/^  +/,""); print }')"
+          filtered=$(comm -23 <(printf '%s\n' $missing | sed '/^$/d' | sort -u) <(printf '%s\n' $pkgs | sed '/^$/d' | sort -u) || true)
+          if [ -n "${filtered//$'\n'/ }" ]; then
+            echo "Missing dependencies: $filtered" >&2
+            exit 1
+          fi
+          echo "All dependencies satisfied"
+
+  debian_container:
+    name: Debian 12 container
+    runs-on: buildjet-2vcpu-ubuntu-2204
+    container: debian:12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare container
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq sudo curl xz-utils ca-certificates git bash
+          update-ca-certificates || true
+      - name: Install packages (Node/Python)
+        run: bash package.sh
+      - name: Re-run install checks and capture output
+        run: bash install.sh | tee install2.out
+      - name: Assert no missing dependencies (exclude packages)
+        shell: bash
+        run: |
+          set -euo pipefail
+          line="$(grep '^\[KECHO\] ALERT MISSING_DEPENDENCIES' install2.out || true)"
+          pkgs_line="$(grep '^\[KECHO\] PACKAGES ' install2.out || true)"
+          echo "$line"
+          missing="$(printf '%s\n' "$line" | sed -E 's/^\[KECHO\] ALERT MISSING_DEPENDENCIES[[:space:]]*//')"
+          pkgs="$(printf '%s\n' "$pkgs_line" | sed -E 's/^\[KECHO\] PACKAGES[[:space:]]*//')"
+          filtered=$(comm -23 <(printf '%s\n' $missing | sed '/^$/d' | sort -u) <(printf '%s\n' $pkgs | sed '/^$/d' | sort -u) || true)
+          if [ -n "${filtered//$'\n'/ }" ]; then
+            echo "Missing dependencies: $filtered" >&2
+            exit 1
+          fi
+          echo "All dependencies satisfied"
+
+  arch_container:
+    name: Arch Linux container
+    runs-on: buildjet-2vcpu-ubuntu-2204
+    container: archlinux:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare container
+        run: |
+          pacman -Sy --noconfirm
+          pacman -S --noconfirm sudo curl xz git base-devel
+      - name: Install packages (Node/Python)
+        run: bash package.sh
+      - name: Re-run install checks and capture output
+        run: bash install.sh | tee install2.out
+      - name: Assert no missing dependencies (exclude packages)
+        shell: bash
+        run: |
+          set -euo pipefail
+          line="$(grep '^\[KECHO\] ALERT MISSING_DEPENDENCIES' install2.out || true)"
+          pkgs_line="$(grep '^\[KECHO\] PACKAGES ' install2.out || true)"
+          echo "$line"
+          missing="$(printf '%s\n' "$line" | sed -E 's/^\[KECHO\] ALERT MISSING_DEPENDENCIES[[:space:]]*//')"
+          pkgs="$(printf '%s\n' "$pkgs_line" | sed -E 's/^\[KECHO\] PACKAGES[[:space:]]*//')"
+          filtered=$(comm -23 <(printf '%s\n' $missing | sed '/^$/d' | sort -u) <(printf '%s\n' $pkgs | sed '/^$/d' | sort -u) || true)
+          if [ -n "${filtered//$'\n'/ }" ]; then
+            echo "Missing dependencies: $filtered" >&2
+            exit 1
+          fi
+          echo "All dependencies satisfied"
+
+  alpine_container:
+    name: Alpine 3.19 container
+    runs-on: buildjet-2vcpu-ubuntu-2204
+    container: alpine:3.19
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare container
+        run: |
+          apk add --no-cache sudo curl xz tar git bash
+      - name: Install packages (Node/Python)
+        shell: bash
+        run: bash package.sh
+      - name: Re-run install checks and capture output
+        shell: bash
+        run: bash install.sh | tee install2.out
+      - name: Assert no missing dependencies (exclude packages)
+        shell: bash
+        run: |
+          set -euo pipefail
+          line="$(grep '^\[KECHO\] ALERT MISSING_DEPENDENCIES' install2.out || true)"
+          pkgs_line="$(grep '^\[KECHO\] PACKAGES ' install2.out || true)"
+          echo "$line"
+          # Drop markers robustly with awk
+          missing="$(printf '%s\n' "$line" | awk '{ $1=""; $2=""; $3=""; sub(/^  +/,""); print }')"
+          pkgs="$(printf '%s\n' "$pkgs_line" | awk '{ $1=""; $2=""; sub(/^  +/,""); print }')"
+          # Subtract package names from missing deps
+          filtered=$(comm -23 <(printf '%s\n' $missing | sed '/^$/d' | sort -u) <(printf '%s\n' $pkgs | sed '/^$/d' | sort -u) || true)
+          if [ -n "${filtered//$'\n'/ }" ]; then
+            echo "Missing dependencies: $filtered" >&2
+            exit 1
+          fi
+          echo "All dependencies satisfied"

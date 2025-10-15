@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
 
 set -e
-if ! sudo -n true; then
-    echo "[KECHO] ALERT SUDO_REQUIRED"
-    exit 1
-fi
 
 echo "[KECHO] PROGRESS PYTHON DEPENDENCIES 0%"
 sudo pacman -Sy --noconfirm >/dev/null
