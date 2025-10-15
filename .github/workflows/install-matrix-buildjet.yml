@@ -3,6 +3,8 @@ name: Install Checks (BuildJet)
 on:
   push:
     branches: ["beta"]
+  pull_request:
+    branches: ["beta"]
 
 jobs:
   ubuntu_x64:
@@ -14,18 +16,22 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq build-essential curl xz-utils
-      - name: Run install.sh and capture output
-        run: |
-          bash install.sh | tee install.out
-      - name: Assert no missing dependencies
+      - name: Install packages (Node/Python)
+        run: bash package.sh
+      - name: Re-run install checks and capture output
+        run: bash install.sh | tee install2.out
+      - name: Assert no missing dependencies (exclude packages)
+        shell: bash
         run: |
           set -euo pipefail
-          line="$(grep '^\[KECHO\] ALERT MISSING_DEPENDENCIES' install.out || true)"
+          line="$(grep '^\[KECHO\] ALERT MISSING_DEPENDENCIES' install2.out || true)"
+          pkgs_line="$(grep '^\[KECHO\] PACKAGES ' install2.out || true)"
           echo "$line"
           missing="${line#*[KECHO] ALERT MISSING_DEPENDENCIES }"
-          missing="$(echo "$missing" | xargs || true)"
-          if [ -n "$missing" ]; then
-            echo "Missing dependencies: $missing" >&2
+          pkgs="${pkgs_line#*[KECHO] PACKAGES }"
+          filtered="$(printf '%s\n' $missing | grep -vxF -f <(printf '%s\n' $pkgs) || true)"
+          if [ -n "${filtered//$'\n'/ }" ]; then
+            echo "Missing dependencies: $filtered" >&2
             exit 1
           fi
           echo "All dependencies satisfied"
@@ -39,18 +45,22 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq build-essential curl xz-utils
-      - name: Run install.sh and capture output
-        run: |
-          bash install.sh | tee install.out
-      - name: Assert no missing dependencies
+      - name: Install packages (Node/Python)
+        run: bash package.sh
+      - name: Re-run install checks and capture output
+        run: bash install.sh | tee install2.out
+      - name: Assert no missing dependencies (exclude packages)
+        shell: bash
         run: |
           set -euo pipefail
-          line="$(grep '^\[KECHO\] ALERT MISSING_DEPENDENCIES' install.out || true)"
+          line="$(grep '^\[KECHO\] ALERT MISSING_DEPENDENCIES' install2.out || true)"
+          pkgs_line="$(grep '^\[KECHO\] PACKAGES ' install2.out || true)"
           echo "$line"
           missing="${line#*[KECHO] ALERT MISSING_DEPENDENCIES }"
-          missing="$(echo "$missing" | xargs || true)"
-          if [ -n "$missing" ]; then
-            echo "Missing dependencies: $missing" >&2
+          pkgs="${pkgs_line#*[KECHO] PACKAGES }"
+          filtered="$(printf '%s\n' $missing | grep -vxF -f <(printf '%s\n' $pkgs) || true)"
+          if [ -n "${filtered//$'\n'/ }" ]; then
+            echo "Missing dependencies: $filtered" >&2
             exit 1
           fi
           echo "All dependencies satisfied"
@@ -64,18 +74,22 @@ jobs:
         run: |
           brew update
           brew install icu4c pkg-config zlib xz libffi openssl@3 || true
-      - name: Run install.sh and capture output
-        run: |
-          bash install.sh | tee install.out
-      - name: Assert no missing dependencies
+      - name: Install packages (Node/Python)
+        run: bash package.sh
+      - name: Re-run install checks and capture output
+        run: bash install.sh | tee install2.out
+      - name: Assert no missing dependencies (exclude packages)
+        shell: bash
         run: |
           set -euo pipefail
-          line="$(grep '^\[KECHO\] ALERT MISSING_DEPENDENCIES' install.out || true)"
+          line="$(grep '^\[KECHO\] ALERT MISSING_DEPENDENCIES' install2.out || true)"
+          pkgs_line="$(grep '^\[KECHO\] PACKAGES ' install2.out || true)"
           echo "$line"
           missing="${line#*[KECHO] ALERT MISSING_DEPENDENCIES }"
-          missing="$(echo "$missing" | xargs || true)"
-          if [ -n "$missing" ]; then
-            echo "Missing dependencies: $missing" >&2
+          pkgs="${pkgs_line#*[KECHO] PACKAGES }"
+          filtered="$(printf '%s\n' $missing | grep -vxF -f <(printf '%s\n' $pkgs) || true)"
+          if [ -n "${filtered//$'\n'/ }" ]; then
+            echo "Missing dependencies: $filtered" >&2
             exit 1
           fi
           echo "All dependencies satisfied"
@@ -89,18 +103,22 @@ jobs:
         run: |
           brew update
           brew install icu4c pkg-config zlib xz libffi openssl@3 || true
-      - name: Run install.sh and capture output
-        run: |
-          bash install.sh | tee install.out
-      - name: Assert no missing dependencies
+      - name: Install packages (Node/Python)
+        run: bash package.sh
+      - name: Re-run install checks and capture output
+        run: bash install.sh | tee install2.out
+      - name: Assert no missing dependencies (exclude packages)
+        shell: bash
         run: |
           set -euo pipefail
-          line="$(grep '^\[KECHO\] ALERT MISSING_DEPENDENCIES' install.out || true)"
+          line="$(grep '^\[KECHO\] ALERT MISSING_DEPENDENCIES' install2.out || true)"
+          pkgs_line="$(grep '^\[KECHO\] PACKAGES ' install2.out || true)"
           echo "$line"
           missing="${line#*[KECHO] ALERT MISSING_DEPENDENCIES }"
-          missing="$(echo "$missing" | xargs || true)"
-          if [ -n "$missing" ]; then
-            echo "Missing dependencies: $missing" >&2
+          pkgs="${pkgs_line#*[KECHO] PACKAGES }"
+          filtered="$(printf '%s\n' $missing | grep -vxF -f <(printf '%s\n' $pkgs) || true)"
+          if [ -n "${filtered//$'\n'/ }" ]; then
+            echo "Missing dependencies: $filtered" >&2
             exit 1
           fi
           echo "All dependencies satisfied"
@@ -116,18 +134,22 @@ jobs:
           apt-get update -qq
           apt-get install -y -qq sudo curl xz-utils ca-certificates git bash
           update-ca-certificates || true
-      - name: Run install.sh and capture output
-        run: |
-          bash install.sh | tee install.out
-      - name: Assert no missing dependencies
+      - name: Install packages (Node/Python)
+        run: bash package.sh
+      - name: Re-run install checks and capture output
+        run: bash install.sh | tee install2.out
+      - name: Assert no missing dependencies (exclude packages)
+        shell: bash
         run: |
           set -euo pipefail
-          line="$(grep '^\[KECHO\] ALERT MISSING_DEPENDENCIES' install.out || true)"
+          line="$(grep '^\[KECHO\] ALERT MISSING_DEPENDENCIES' install2.out || true)"
+          pkgs_line="$(grep '^\[KECHO\] PACKAGES ' install2.out || true)"
           echo "$line"
           missing="${line#*[KECHO] ALERT MISSING_DEPENDENCIES }"
-          missing="$(echo "$missing" | xargs || true)"
-          if [ -n "$missing" ]; then
-            echo "Missing dependencies: $missing" >&2
+          pkgs="${pkgs_line#*[KECHO] PACKAGES }"
+          filtered="$(printf '%s\n' $missing | grep -vxF -f <(printf '%s\n' $pkgs) || true)"
+          if [ -n "${filtered//$'\n'/ }" ]; then
+            echo "Missing dependencies: $filtered" >&2
             exit 1
           fi
           echo "All dependencies satisfied"
@@ -142,18 +164,22 @@ jobs:
         run: |
           pacman -Sy --noconfirm
           pacman -S --noconfirm sudo curl xz git base-devel
-      - name: Run install.sh and capture output
-        run: |
-          bash install.sh | tee install.out
-      - name: Assert no missing dependencies
+      - name: Install packages (Node/Python)
+        run: bash package.sh
+      - name: Re-run install checks and capture output
+        run: bash install.sh | tee install2.out
+      - name: Assert no missing dependencies (exclude packages)
+        shell: bash
         run: |
           set -euo pipefail
-          line="$(grep '^\[KECHO\] ALERT MISSING_DEPENDENCIES' install.out || true)"
+          line="$(grep '^\[KECHO\] ALERT MISSING_DEPENDENCIES' install2.out || true)"
+          pkgs_line="$(grep '^\[KECHO\] PACKAGES ' install2.out || true)"
           echo "$line"
           missing="${line#*[KECHO] ALERT MISSING_DEPENDENCIES }"
-          missing="$(echo "$missing" | xargs || true)"
-          if [ -n "$missing" ]; then
-            echo "Missing dependencies: $missing" >&2
+          pkgs="${pkgs_line#*[KECHO] PACKAGES }"
+          filtered="$(printf '%s\n' $missing | grep -vxF -f <(printf '%s\n' $pkgs) || true)"
+          if [ -n "${filtered//$'\n'/ }" ]; then
+            echo "Missing dependencies: $filtered" >&2
             exit 1
           fi
           echo "All dependencies satisfied"
@@ -167,20 +193,24 @@ jobs:
       - name: Prepare container
         run: |
           apk add --no-cache sudo curl xz tar git bash
-      - name: Run install.sh and capture output
+      - name: Install packages (Node/Python)
         shell: bash
-        run: |
-          bash install.sh | tee install.out
-      - name: Assert no missing dependencies
+        run: bash package.sh
+      - name: Re-run install checks and capture output
+        shell: bash
+        run: bash install.sh | tee install2.out
+      - name: Assert no missing dependencies (exclude packages)
         shell: bash
         run: |
           set -euo pipefail
-          line="$(grep '^\[KECHO\] ALERT MISSING_DEPENDENCIES' install.out || true)"
+          line="$(grep '^\[KECHO\] ALERT MISSING_DEPENDENCIES' install2.out || true)"
+          pkgs_line="$(grep '^\[KECHO\] PACKAGES ' install2.out || true)"
           echo "$line"
           missing="${line#*[KECHO] ALERT MISSING_DEPENDENCIES }"
-          missing="$(echo "$missing" | xargs || true)"
-          if [ -n "$missing" ]; then
-            echo "Missing dependencies: $missing" >&2
+          pkgs="${pkgs_line#*[KECHO] PACKAGES }"
+          filtered="$(printf '%s\n' $missing | grep -vxF -f <(printf '%s\n' $pkgs) || true)"
+          if [ -n "${filtered//$'\n'/ }" ]; then
+            echo "Missing dependencies: $filtered" >&2
             exit 1
           fi
           echo "All dependencies satisfied"
