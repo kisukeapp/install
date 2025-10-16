@@ -117,8 +117,13 @@ def anthropic_request_to_codex(
 ) -> Dict[str, Any]:
     """Convert Anthropic request to Codex format (ChatGPT backend protocol)."""
 
-    # Get system instructions
-    instructions = resolve_system_instruction(provider, auth_method, explicit_instruction) or ""
+    # Get system instructions (model-aware)
+    instructions = resolve_system_instruction(
+        provider,
+        auth_method,
+        explicit_instruction,
+        model=context.effective_model or context.requested_model,
+    ) or ""
 
     # Model mapping - use base models only
     original_model = context.effective_model or context.requested_model

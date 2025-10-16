@@ -45,7 +45,12 @@ def map_anthropic_to_chatgpt_backend(
 ) -> Tuple[Dict[str, Any], Dict[str, str]]:
     """Build a ChatGPT backend API payload from an Anthropic /v1/messages request."""
 
-    instructions = resolve_system_instruction(provider, auth_method, explicit_instruction) or ""
+    instructions = resolve_system_instruction(
+        provider,
+        auth_method,
+        explicit_instruction,
+        model=model,
+    ) or ""
 
     payload: Dict[str, Any] = {
         "stream": True,
