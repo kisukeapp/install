@@ -187,6 +187,62 @@ detect_package_manager() {
     return 0
 }
 
+resolve_tmux_path() {
+    local p
+
+    # 1) Prefer PATH (real executable), ignore our own symlink
+    if p="$(type -P tmux 2>/dev/null)" && [[ -n "$p" && -x "$p" && "$p" != "$BIN_DIR/tmux" ]]; then
+        echo "$p"
+        return 0
+    fi
+    if p="$(command -v tmux 2>/dev/null || true)" && [[ -n "$p" && -x "$p" && "$p" != "$BIN_DIR/tmux" ]]; then
+        echo "$p"
+        return 0
+    fi
+
+    # 2) Homebrew (any arch): prefer global bin, then formula prefix
+    local brew_exe="${BREW_CMD:-}"
+    if [[ -z "$brew_exe" ]]; then
+        brew_exe="$(command -v brew 2>/dev/null || true)"
+    elif [[ ! -x "$brew_exe" ]]; then
+        brew_exe="$(command -v "$brew_exe" 2>/dev/null || true)"
+    fi
+    if [[ -n "$brew_exe" ]]; then
+        # Global HOMEBREW_PREFIX/bin
+        local hb_prefix
+        hb_prefix="$("$brew_exe" --prefix 2>/dev/null || true)"
+        if [[ -n "$hb_prefix" && -x "$hb_prefix/bin/tmux" && "$hb_prefix/bin/tmux" != "$BIN_DIR/tmux" ]]; then
+            echo "$hb_prefix/bin/tmux"
+            return 0
+        fi
+        # Formula opt prefix
+        local opt_prefix
+        opt_prefix="$("$brew_exe" --prefix tmux 2>/dev/null || true)"
+        if [[ -n "$opt_prefix" && -x "$opt_prefix/bin/tmux" && "$opt_prefix/bin/tmux" != "$BIN_DIR/tmux" ]]; then
+            echo "$opt_prefix/bin/tmux"
+            return 0
+        fi
+    fi
+
+    # 3) Common locations (MacPorts, Fink, Nix, legacy)
+    local cand
+    for cand in \
+        "/opt/homebrew/bin/tmux" \
+        "/usr/local/bin/tmux" \
+        "/opt/local/bin/tmux" \
+        "/sw/bin/tmux" \
+        "$HOME/.nix-profile/bin/tmux" \
+        "/etc/profiles/per-user/$USER/bin/tmux" \
+        "/usr/bin/tmux"; do
+        if [[ -x "$cand" && "$cand" != "$BIN_DIR/tmux" ]]; then
+            echo "$cand"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
 cache_set() {
     local pkg="$1" version="${2:-unknown}"
     local timestamp
@@ -233,37 +289,10 @@ get_version() {
                 [[ -z "$ver" ]] && ver="unknown"
             fi
             ;;
-        tmux) 
-            # On macOS, check brew first if available
-            if [[ "$OS" == "mac" && -n "$BREW_CMD" ]]; then
-                # Ensure we have the brew executable (handle both full path and command name)
-                local brew_exe="$BREW_CMD"
-                if [[ ! -x "$brew_exe" ]]; then
-                    brew_exe=$(command -v "$BREW_CMD" 2>/dev/null)
-                fi
-                
-                if [[ -x "$brew_exe" ]] && "$brew_exe" list tmux >/dev/null 2>&1; then
-                    # Get the actual tmux path from brew
-                    local tmux_path=""
-                    local brew_prefix
-                    if brew_prefix=$("$brew_exe" --prefix tmux 2>/dev/null); then
-                        tmux_path="$brew_prefix/bin/tmux"
-                    fi
-                    # Fallback to standard brew bin location if prefix command fails
-                    if [[ ! -x "$tmux_path" && "$brew_exe" =~ ^/.*/brew$ ]]; then
-                        # Only try this if brew_exe is a full path
-                        tmux_path="${brew_exe%/brew}/tmux"
-                    fi
-                    # Get version if we found the executable
-                    if [[ -x "$tmux_path" ]]; then
-                        ver=$("$tmux_path" -V 2>/dev/null | awk '{print $2}' || echo "unknown")
-                        [[ -z "$ver" ]] && ver="unknown"
-                    fi
-                fi
-            fi
-            # Fallback to command -v if not found via brew
-            if [[ -z "$ver" || "$ver" == "unknown" ]] && command -v tmux >/dev/null 2>&1; then
-                ver=$(tmux -V 2>/dev/null | awk '{print $2}' || echo "unknown")
+        tmux)
+            local tmux_path
+            if tmux_path=$(resolve_tmux_path); then
+                ver=$("$tmux_path" -V 2>/dev/null | awk '{print $2}' || echo "unknown")
                 [[ -z "$ver" ]] && ver="unknown"
             fi
             ;;
@@ -519,33 +548,18 @@ create_system_symlinks() {
             
             local system_path=""
             
-            # Special handling for tmux on macOS with brew
-            if [[ "$pkg" == "tmux" && "$OS" == "mac" && -n "$BREW_CMD" ]]; then
-                # Ensure we have the brew executable (handle both full path and command name)
-                local brew_exe="$BREW_CMD"
-                if [[ ! -x "$brew_exe" ]]; then
-                    brew_exe=$(command -v "$BREW_CMD" 2>/dev/null)
+            if [[ "$pkg" == "tmux" ]]; then
+                if ! system_path=$(resolve_tmux_path); then
+                    log ERROR "Could not find tmux executable"
+                    return 1
                 fi
-                
-                if [[ -x "$brew_exe" ]]; then
-                    # Check if tmux is installed via brew
-                    if "$brew_exe" list tmux >/dev/null 2>&1; then
-                        # Get the actual tmux path from brew prefix
-                        local brew_prefix
-                        if brew_prefix=$("$brew_exe" --prefix tmux 2>/dev/null); then
-                            system_path="$brew_prefix/bin/tmux"
-                        fi
-                        # Fallback to standard brew bin location if prefix command fails
-                        if [[ ! -x "$system_path" && "$brew_exe" =~ ^/.*/brew$ ]]; then
-                            # Only try this if brew_exe is a full path
-                            system_path="${brew_exe%/brew}/tmux"
-                        fi
-                    fi
+                # Validate tmux runs
+                if ! "$system_path" -V >/dev/null 2>&1; then
+                    log ERROR "tmux binary found but not runnable: $system_path"
+                    return 1
                 fi
-            fi
-            
-            # Fallback to command -v if not found via brew or for other packages
-            if [[ -z "$system_path" || ! -x "$system_path" ]]; then
+            else
+                # Fallback to command -v for other packages (git)
                 if command -v "$pkg" >/dev/null 2>&1; then
                     system_path=$(command -v "$pkg" 2>/dev/null)
                 fi
@@ -586,8 +600,12 @@ install_system_package() {
     remove_system_symlinks "$pkg"
     # Check if already installed first
     if command -v "$pkg" >/dev/null 2>&1; then
-        create_system_symlinks "$pkg"
-        return 0
+        if create_system_symlinks "$pkg"; then
+            return 0
+        else
+            log ERROR "Failed to create $pkg symlink"
+            return 1
+        fi
     fi
     
     [[ "$pkg" == "git"  && "$PKG_MGR" == "portage" ]] && pkg_name="dev-vcs/git"
@@ -616,8 +634,12 @@ install_system_package() {
             ver="unknown"
         fi
         cache_set "$pkg" "$ver"
-        create_system_symlinks "$pkg"
-        return 0
+        if create_system_symlinks "$pkg"; then
+            return 0
+        else
+            log ERROR "Failed to create $pkg symlink"
+            return 1
+        fi
     fi
     
     log ERROR "Failed to install $pkg using $PKG_MGR"
@@ -1121,7 +1143,12 @@ handle_install() {
                     fi
                     log OK "$pkg already installed (v$ver)"
                     [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] OK LOCAL_BIN $pkg already installed"
-                    create_system_symlinks "$pkg"
+                    if ! create_system_symlinks "$pkg"; then
+                        log ERROR "Failed to create $pkg symlink"
+                        [[ $MOBILE_APP -eq 1 ]] && echo "[KECHO] ERROR Failed to link $pkg - this is a critical failure"
+                        failed_packages="$failed_packages $pkg"
+                        has_critical_failure=1
+                    fi
                 else
                     # Not installed - attempt installation
                     if install_system_package "$pkg"; then
