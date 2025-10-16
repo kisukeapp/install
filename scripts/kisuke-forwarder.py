@@ -84,8 +84,10 @@ class TmuxMonitor:
     """
     def __init__(self):
         self.detected_ports = defaultdict(dict)
-        self.emitted_broker_ports = set()  # Track broker events to avoid spam
-        self.broker_panes = set()  # Track panes running the broker
+        # Track broker readiness emissions per pane/port to allow re-emission
+        # when a new broker session starts (e.g., new tmux window with same port)
+        self.emitted_broker_by_pane = set()  # entries like "%1:8766"
+        self.broker_panes = set()  # Track panes running the broker (for generic-scan suppression)
         self.running = True
         self.emit_lock = threading.Lock()  # Ensure atomic JSON writes
         # Initialize and send startup event
@@ -158,7 +160,7 @@ class TmuxMonitor:
         except Exception:
             return ""
             
-    def extract_ports(self, text, pane_id):
+    def extract_ports(self, text, pane_id, skip_generic=False):
         """Extract port numbers and protocols from text.
 
         Scans text for patterns matching development server URLs and
@@ -175,18 +177,28 @@ class TmuxMonitor:
         ports = {}  # Dictionary mapping port to (protocol, path)
 
         # Check for broker ready signal (event-driven startup)
-        # Only emit once per port to avoid spam
-        broker_match = re.search(r'BROKER_READY:(\d+)', text)
-        if broker_match:
-            port = int(broker_match.group(1))
-            if port not in self.emitted_broker_ports:
-                self.emitted_broker_ports.add(port)
-                self.broker_panes.add(pane_id)  # Mark this pane as running broker
-                self.emit_event({
-                    'type': 'BROKER_READY',
-                    'port': port
-                })
+        # Emit once per (pane_id, port) so restarts in a new window re-emit
+        broker_matches = re.findall(r'BROKER_READY:(\d+)', text)
+        if broker_matches:
+            # Emit for unique ports found in this pane capture
+            for port_str in set(broker_matches):
+                try:
+                    port = int(port_str)
+                except ValueError:
+                    continue
+                key = f"{pane_id}:{port}"
+                if key not in self.emitted_broker_by_pane:
+                    self.emitted_broker_by_pane.add(key)
+                    self.broker_panes.add(pane_id)  # Mark this pane as running broker
+                    self.emit_event({
+                        'type': 'BROKER_READY',
+                        'port': port
+                    })
             # Don't scan broker panes for other URLs
+            return ports
+
+        # If this is a broker pane, skip generic URL scanning to avoid noise
+        if skip_generic:
             return ports
 
         for pattern, default_protocol in URL_PATTERNS:
@@ -250,14 +262,23 @@ class TmuxMonitor:
         while self.running:
             try:
                 panes = self.get_tmux_panes()
+                current_panes = set(panes)
+
+                # Cleanup state for panes that no longer exist
+                self.broker_panes.intersection_update(current_panes)
+                if self.emitted_broker_by_pane:
+                    self.emitted_broker_by_pane = {
+                        key for key in self.emitted_broker_by_pane
+                        if key.split(':', 1)[0] in current_panes
+                    }
 
                 for pane_id in panes:
-                    # Skip broker panes - they shouldn't be scanned for dev server URLs
-                    if pane_id in self.broker_panes:
-                        continue
-
                     output = self.capture_pane_output(pane_id)
-                    detected_ports_info = self.extract_ports(output, pane_id)
+                    detected_ports_info = self.extract_ports(
+                        output,
+                        pane_id,
+                        skip_generic=(pane_id in self.broker_panes)
+                    )
 
                     for port, (protocol, path) in detected_ports_info.items():
                         if port not in self.detected_ports:
