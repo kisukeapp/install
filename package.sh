@@ -2,6 +2,12 @@
 set -euo pipefail
 
 BIN_DIR="$HOME/.kisuke/bin"
+
+# Speed up Homebrew on CI and avoid long source builds on older macOS
+export HOMEBREW_NO_AUTO_UPDATE=1
+export HOMEBREW_NO_INSTALL_FROM_SOURCE=1
+export HOMEBREW_NO_ANALYTICS=1
+export HOMEBREW_NO_EMOJI=1
 echo "[KECHO] Cleaning previous Kisuke archives and directories..."
 
 rm -f "$HOME"/kisuke-*.tar.xz
