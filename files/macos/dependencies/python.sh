@@ -1,14 +1,21 @@
 #!/usr/bin/env bash
 
-set -e
-if ! command -v brew &>/dev/null; then
-    echo "[KECHO] ALERT HOMEBREW_REQUIRED"
-    exit 1
-fi
-
+set -euo pipefail
 
 echo "[KECHO] PROGRESS PYTHON DEPENDENCIES 0%"
-brew update >/dev/null
-echo "[KECHO] PROGRESS PYTHON DEPENDENCIES 40%"
-brew install zlib xz libffi openssl@3 >/dev/null
+
+# Only ensure xz is present for packaging; Python itself is standalone.
+if ! command -v xz >/dev/null 2>&1; then
+    if command -v brew >/dev/null 2>&1; then
+        echo "[KECHO] PROGRESS PYTHON DEPENDENCIES 40%"
+        # Respect brew env from package.sh (no update, no source builds)
+        brew install xz >/dev/null 2>&1 || brew install xz
+    else
+        echo "[KECHO] ALERT HOMEBREW_REQUIRED"
+        exit 1
+    fi
+else
+    echo "[KECHO] PROGRESS PYTHON DEPENDENCIES 40%"
+fi
+
 echo "[KECHO] PROGRESS PYTHON DEPENDENCIES 100%"
