@@ -188,66 +188,12 @@ def dataclass_to_dict(value: Any) -> Any:
 
 @lru_cache(maxsize=1)
 def get_claude_cli_path() -> Optional[str]:
-    """Find the Claude CLI executable path.
+    """Return the Kisuke-managed Claude CLI path.
 
-    Search order:
-    1) Kisuke isolated paths
-    2) PATH
-    3) Common system locations
-    4) npm prefix (Kisuke wrapper first, then system npm)
+    Assumes setup.sh has installed and linked the CLI, so no
+    filesystem checks are performed here.
     """
-    # 1) Kisuke isolated installs
-    kisuke_paths = [
-        os.path.expanduser("~/.kisuke/bin/claude"),
-        os.path.expanduser("~/.kisuke/bin/nodejs/bin/claude"),
-    ]
-    for p in kisuke_paths:
-        if os.path.exists(p) and os.access(p, os.X_OK):
-            return p
-
-    # 2) PATH
-    try:
-        result = subprocess.run(["which", "claude"], capture_output=True, text=True)
-        if result.returncode == 0:
-            return result.stdout.strip()
-    except Exception:
-        pass
-
-    # 3) Common system locations
-    common_paths = [
-        "/usr/local/bin/claude",
-        "/opt/homebrew/bin/claude",
-        os.path.expanduser("~/.local/bin/claude"),
-        os.path.expanduser("~/bin/claude"),
-    ]
-    for path in common_paths:
-        if os.path.exists(path) and os.access(path, os.X_OK):
-            return path
-
-    # 4) npm prefix discovery (prefer Kisuke wrapper)
-    try:
-        # Try Kisuke npm wrapper first
-        kisuke_npm = os.path.expanduser("~/.kisuke/bin/npm")
-        prefixes_to_try: List[str] = []
-        if os.path.exists(kisuke_npm) and os.access(kisuke_npm, os.X_OK):
-            pfx = subprocess.run([kisuke_npm, "config", "get", "prefix"], capture_output=True, text=True)
-            if pfx.returncode == 0:
-                prefixes_to_try.append(pfx.stdout.strip())
-        # Fallback to system npm
-        pfx2 = subprocess.run(["npm", "config", "get", "prefix"], capture_output=True, text=True)
-        if pfx2.returncode == 0:
-            prefixes_to_try.append(pfx2.stdout.strip())
-
-        for prefix in prefixes_to_try:
-            if not prefix:
-                continue
-            path = os.path.join(prefix, "bin", "claude")
-            if os.path.exists(path) and os.access(path, os.X_OK):
-                return path
-    except Exception:
-        pass
-
-    return None
+    return os.path.expanduser("~/.kisuke/bin/claude")
 
 def setup_logging(level: str = "INFO") -> None:
     """Set up logging configuration."""

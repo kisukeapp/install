@@ -103,23 +103,8 @@ class KisukeBroker:
             return
         
         log.info("Starting Kisuke Broker...")
-        
-        # Check for Claude CLI
-        claude_path = get_claude_cli_path()
-        if not claude_path:
-            log.warning("Claude CLI not found - make sure it's installed")
-        else:
-            log.info(f"Found Claude CLI at {claude_path}")
-        
-        # Start embedded proxy
-        await self._start_proxy()
-        
-        # Start core components
-        await self.connection_manager.start()
-        await self.message_buffer.start()
-        await self.session_manager.start()
-        
-        # Start WebSocket server
+
+        # Start WebSocket server first for fastest readiness signal
         async def connection_handler(websocket, path=None):
             await self.message_handlers.handle_connection(websocket, path or "/")
 
@@ -136,6 +121,23 @@ class KisukeBroker:
 
         # Print to stdout for forwarder detection (event-driven startup)
         print(f"BROKER_READY:{self.port}", flush=True)
+
+        # Kick off remaining startup tasks concurrently (proxy + managers)
+        # These are lightweight and don't block accepting connections.
+        # They are required before handling session/SDK flows, but not for the initial handshake.
+        await asyncio.gather(
+            self._start_proxy(),
+            self.connection_manager.start(),
+            self.message_buffer.start(),
+            self.session_manager.start(),
+        )
+
+        # Optional: log Claude CLI location (non-blocking check)
+        claude_path = get_claude_cli_path()
+        if not claude_path:
+            log.warning("Claude CLI not found - make sure it's installed")
+        else:
+            log.info(f"Using Claude CLI at {claude_path}")
 
         self.running = True
     
