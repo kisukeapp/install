@@ -27,8 +27,14 @@ import sys
 import time
 import socket
 import subprocess
+import stat
 import threading
 from collections import defaultdict
+
+# --- Streaming support using tmux pipe-pane ---
+# We attach to each pane in the session via `tmux pipe-pane` and stream
+# appended output through a named FIFO that this process reads. This avoids
+# repeated capture-pane polling and reduces CPU while improving latency.
 
 # Configuration
 TMUX_SESSION = os.environ.get("KISUKE_TMUX_SESSION", "kisuke-terminal")  # Tmux session to monitor
@@ -90,6 +96,9 @@ class TmuxMonitor:
         self.broker_panes = set()  # Track panes running the broker (for generic-scan suppression)
         self.running = True
         self.emit_lock = threading.Lock()  # Ensure atomic JSON writes
+        self.state_lock = threading.Lock()  # Protect shared state across threads
+        self.pane_fifos = {}  # pane_id -> fifo path
+        self.pane_threads = {}  # pane_id -> reader thread
         # Initialize and send startup event
         self.emit_event({
             'type': 'FORWARDER_STARTED',
@@ -188,8 +197,9 @@ class TmuxMonitor:
                     continue
                 key = f"{pane_id}:{port}"
                 if key not in self.emitted_broker_by_pane:
-                    self.emitted_broker_by_pane.add(key)
-                    self.broker_panes.add(pane_id)  # Mark this pane as running broker
+                    with self.state_lock:
+                        self.emitted_broker_by_pane.add(key)
+                        self.broker_panes.add(pane_id)  # Mark this pane as running broker
                     self.emit_event({
                         'type': 'BROKER_READY',
                         'port': port
@@ -252,6 +262,102 @@ class TmuxMonitor:
             return False
             
             
+    def _sanitize_pane_id(self, pane_id: str) -> str:
+        return pane_id.replace('%', 'p').replace(':', '_')
+
+    def _fifo_path_for_pane(self, pane_id: str) -> str:
+        sanitized = self._sanitize_pane_id(pane_id)
+        return f"/tmp/kisuke-forwarder-{sanitized}.fifo"
+
+    def _ensure_fifo(self, path: str):
+        try:
+            if os.path.exists(path):
+                # If it exists but is not a FIFO, replace it
+                if not stat.S_ISFIFO(os.stat(path).st_mode):
+                    os.remove(path)
+                    os.mkfifo(path)
+            else:
+                os.mkfifo(path)
+        except FileExistsError:
+            pass
+
+    def _start_pane_stream(self, pane_id: str):
+        import stat
+        path = self._fifo_path_for_pane(pane_id)
+        self._ensure_fifo(path)
+
+        # Start reader thread first so writer has a reader
+        def reader():
+            try:
+                with open(path, 'r', buffering=1, encoding='utf-8', errors='ignore') as f:
+                    for line in f:
+                        # Process line incrementally
+                        detected = self.extract_ports(line, pane_id, skip_generic=(pane_id in self.broker_panes))
+                        if detected:
+                            for port, (protocol, p) in detected.items():
+                                # Apply same gating as polling: only emit if active or a common dev port
+                                port_active = self.check_port_active(port)
+                                if port_active or (3000 <= port <= 9999):
+                                    with self.state_lock:
+                                        if port not in self.detected_ports:
+                                            # Port newly seen via stream
+                                            self.detected_ports[port] = {
+                                                'pane_id': pane_id,
+                                                'protocol': protocol,
+                                                'path': p,
+                                                'detected_at': time.time()
+                                            }
+                                            self.emit_event({
+                                                'type': 'PORT_REQUEST',
+                                                'port': port,
+                                                'protocol': protocol,
+                                                'path': p
+                                            })
+            except Exception:
+                pass
+
+        t = threading.Thread(target=reader, name=f"pane-reader-{pane_id}", daemon=True)
+        t.start()
+
+        # Attach tmux pipe-pane to write appended output into FIFO
+        try:
+            subprocess.run(
+                ['tmux', 'pipe-pane', '-t', pane_id, f"cat > {path}"],
+                check=False,
+                capture_output=True,
+                text=True
+            )
+        except Exception:
+            # If pipe-pane fails, stop the reader and fallback to polling for this pane
+            try:
+                if t.is_alive():
+                    # No explicit way to stop thread; it will exit when FIFO is closed
+                    pass
+            except Exception:
+                pass
+            return
+
+        with self.state_lock:
+            self.pane_fifos[pane_id] = path
+            self.pane_threads[pane_id] = t
+
+    def _stop_pane_stream(self, pane_id: str):
+        # Disable tmux pipe for pane
+        try:
+            subprocess.run(['tmux', 'pipe-pane', '-t', pane_id], check=False, capture_output=True, text=True)
+        except Exception:
+            pass
+
+        # Close and remove FIFO
+        with self.state_lock:
+            path = self.pane_fifos.pop(pane_id, None)
+            _ = self.pane_threads.pop(pane_id, None)
+        if path and os.path.exists(path):
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+
     def monitor_panes(self):
         """Main monitoring loop for detecting development servers.
 
@@ -264,44 +370,26 @@ class TmuxMonitor:
                 panes = self.get_tmux_panes()
                 current_panes = set(panes)
 
-                # Cleanup state for panes that no longer exist
-                self.broker_panes.intersection_update(current_panes)
-                if self.emitted_broker_by_pane:
-                    self.emitted_broker_by_pane = {
-                        key for key in self.emitted_broker_by_pane
-                        if key.split(':', 1)[0] in current_panes
-                    }
-
+                # Ensure streaming is attached for current panes
                 for pane_id in panes:
-                    output = self.capture_pane_output(pane_id)
-                    detected_ports_info = self.extract_ports(
-                        output,
-                        pane_id,
-                        skip_generic=(pane_id in self.broker_panes)
-                    )
+                    with self.state_lock:
+                        has_stream = pane_id in self.pane_fifos
+                    if not has_stream:
+                        self._start_pane_stream(pane_id)
 
-                    for port, (protocol, path) in detected_ports_info.items():
-                        if port not in self.detected_ports:
-                            # Process newly detected port
-                            port_active = self.check_port_active(port)
+                # Cleanup state for panes that no longer exist
+                for old_pane in list(self.pane_fifos.keys()):
+                    if old_pane not in current_panes:
+                        self._stop_pane_stream(old_pane)
 
-                            # Development servers may not be immediately accessible
-                            # Forward port info optimistically for common dev ports
-                            if port_active or (3000 <= port <= 9999):
-                                self.detected_ports[port] = {
-                                    'pane_id': pane_id,
-                                    'protocol': protocol,
-                                    'path': path,
-                                    'detected_at': time.time()
-                                }
-
-                                # Send port forwarding request to iOS
-                                self.emit_event({
-                                    'type': 'PORT_REQUEST',
-                                    'port': port,
-                                    'protocol': protocol,
-                                    'path': path
-                                })
+                # Keep broker-pane and emitted set consistent with existing panes
+                with self.state_lock:
+                    self.broker_panes.intersection_update(current_panes)
+                    if self.emitted_broker_by_pane:
+                        self.emitted_broker_by_pane = {
+                            key for key in self.emitted_broker_by_pane
+                            if key.split(':', 1)[0] in current_panes
+                        }
 
                 # Verify previously detected ports are still active
                 for port in list(self.detected_ports.keys()):
@@ -331,7 +419,9 @@ class TmuxMonitor:
 
                     if not port_active and port_age > grace_period:
                         # Port closed - remove and notify iOS
-                        del self.detected_ports[port]
+                        with self.state_lock:
+                            if port in self.detected_ports:
+                                del self.detected_ports[port]
 
                         # Notify iOS that port is no longer available
                         self.emit_event({
@@ -363,6 +453,12 @@ class TmuxMonitor:
             pass
         finally:
             self.running = False
+            # Cleanup pipe-pane and FIFOs
+            try:
+                for pane_id in list(self.pane_fifos.keys()):
+                    self._stop_pane_stream(pane_id)
+            except Exception:
+                pass
 
 def main():
     """Main entry point for the port forwarder.

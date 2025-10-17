@@ -45,6 +45,10 @@ class PermissionTransport(SubprocessCLITransport):
             cli_path: Optional path to Claude CLI
         """
         log.info(f"PermissionTransport initialized with permission_manager={permission_manager}, tab_id={tab_id}")
+        # Enforce use of Kisuke-managed Claude CLI unless explicitly provided
+        if cli_path is None:
+            from .utils import get_claude_cli_path
+            cli_path = get_claude_cli_path()
         super().__init__(prompt, options, cli_path)
         self.permission_manager = permission_manager
         self.tab_id = tab_id

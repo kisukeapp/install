@@ -39,6 +39,10 @@ class DebugTransport(SubprocessCLITransport):
             cli_path: Path to Claude CLI
             log_all_messages: If True, log ALL messages (not just control). Default False.
         """
+        # Enforce Kisuke-managed CLI unless overridden
+        if cli_path is None:
+            from .utils import get_claude_cli_path
+            cli_path = get_claude_cli_path()
         super().__init__(prompt, options, cli_path)
         self.log_all_messages = log_all_messages
 
