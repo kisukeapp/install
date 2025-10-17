@@ -294,22 +294,25 @@ class TmuxMonitor:
                         # Process line incrementally
                         detected = self.extract_ports(line, pane_id, skip_generic=(pane_id in self.broker_panes))
                         if detected:
-                            with self.state_lock:
-                                for port, (protocol, p) in detected.items():
-                                    if port not in self.detected_ports:
-                                        # Port newly seen via stream
-                                        self.detected_ports[port] = {
-                                            'pane_id': pane_id,
-                                            'protocol': protocol,
-                                            'path': p,
-                                            'detected_at': time.time()
-                                        }
-                                        self.emit_event({
-                                            'type': 'PORT_REQUEST',
-                                            'port': port,
-                                            'protocol': protocol,
-                                            'path': p
-                                        })
+                            for port, (protocol, p) in detected.items():
+                                # Apply same gating as polling: only emit if active or a common dev port
+                                port_active = self.check_port_active(port)
+                                if port_active or (3000 <= port <= 9999):
+                                    with self.state_lock:
+                                        if port not in self.detected_ports:
+                                            # Port newly seen via stream
+                                            self.detected_ports[port] = {
+                                                'pane_id': pane_id,
+                                                'protocol': protocol,
+                                                'path': p,
+                                                'detected_at': time.time()
+                                            }
+                                            self.emit_event({
+                                                'type': 'PORT_REQUEST',
+                                                'port': port,
+                                                'protocol': protocol,
+                                                'path': p
+                                            })
             except Exception:
                 pass
 
