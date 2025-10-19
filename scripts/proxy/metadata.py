@@ -34,7 +34,7 @@ def _stable_identifiers() -> str:
 
 
 def ensure_metadata(raw_body: Dict[str, Any] | None) -> Dict[str, Any]:
-    """Return a metadata mapping that mirrors CLIProxyAPI's structure.
+    """Return a normalized metadata mapping.
 
     The reference implementation guarantees a ``user_id`` string while discarding
     additional caller-supplied metadata. OpenAI rejects nested metadata payloads,

@@ -78,7 +78,7 @@ class GeminiExecutor(ProviderExecutor):
         if auth_method != "oauth" and self.cfg.api_key:
             url = f"{url}?key={self.cfg.api_key}"
 
-        # Add alt parameter for SSE streaming per CLIProxyAPI spec
+        # Add alt parameter for SSE streaming
         # When alt="", add alt=sse for true SSE mode (only for streaming)
         # When alt has value, add $alt={value} for custom mode
         if self.alt == "" and action == "streamGenerateContent":
@@ -149,8 +149,8 @@ class GeminiExecutor(ProviderExecutor):
                 status=400,
             )
 
-        # Determine if we should stream
-        stream = bool(self.request_body.get("stream", False))
+        # Always stream downstream to the client
+        stream = True
 
         # Build URL and headers
         url = self._build_url(stream=stream)
@@ -218,7 +218,12 @@ class GeminiExecutor(ProviderExecutor):
 
                     # Handle successful response
                     if stream or self.alt:
-                        return await self._stream_response(request, upstream)
+                        # Fallback to synthesized SSE if upstream is not streaming
+                        ctype = (upstream.headers.get("Content-Type") or "").lower()
+                        if "text/event-stream" in ctype:
+                            return await self._stream_response(request, upstream)
+                        # Non-stream upstream; stream synthesized SSE to client
+                        return await self._non_stream_as_sse(request, upstream)
                     else:
                         return await self._non_stream_response(upstream)
 
@@ -334,6 +339,34 @@ class GeminiExecutor(ProviderExecutor):
         await resp.write_eof()
         return resp
 
+    async def _non_stream_as_sse(self, request: web.Request, upstream) -> web.StreamResponse:
+        """Fallback: upstream returned JSON; stream synthesized SSE to client."""
+        try:
+            gemini_response = await upstream.json()
+            # Convert to Anthropic final message
+            anthropic_response = gemini_response_to_anthropic(gemini_response)
+
+            # Attach metadata if configured
+            if self.metadata:
+                anthropic_response.setdefault("metadata", self.metadata)
+
+            # Stream synthesized SSE frames
+            resp = web.StreamResponse(headers={"Content-Type": "text/event-stream"})
+            await resp.prepare(request)
+
+            from ..sse import frames_from_final_message
+            for frame in frames_from_final_message(anthropic_response):
+                await resp.write(frame)
+
+            await resp.write_eof()
+            return resp
+        except Exception as e:
+            debug_log("Fallback SSE error: %s", str(e))
+            return web.json_response(
+                anthropic_error_payload(f"Failed to process response: {str(e)}", "api_error"),
+                status=500,
+            )
+
     async def count_tokens(self, request: web.Request) -> web.Response:
         """Count tokens for a request using Gemini API."""
         from ..translators.gemini import gemini_token_count_response
@@ -360,7 +393,7 @@ class GeminiExecutor(ProviderExecutor):
                 status=400,
             )
 
-        # For countTokens, remove tools and generationConfig (per CLIProxyAPI spec)
+        # For countTokens, remove tools and generationConfig
         gemini_body.pop("tools", None)
         gemini_body.pop("generationConfig", None)
 

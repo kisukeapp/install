@@ -1,7 +1,4 @@
-"""Shared context for managing state across translation and execution.
-
-Following CLIProxyAPI's pattern of separation of concerns.
-"""
+"""Shared context for managing state across translation and execution."""
 
 from __future__ import annotations
 
@@ -94,6 +91,28 @@ class ToolContext:
             return mapping.short_name or mapping.name
         return None
 
+    def link_anthropic_to_external(
+        self,
+        anthropic_id: str,
+        external_id: str,
+        name: str,
+        short_name: Optional[str] = None,
+    ) -> None:
+        """Link a known Anthropic tool_use ID to a specific external tool_call ID.
+
+        This is used for OpenAI v1 request translation so that subsequent
+        user tool_result messages can reference the correct upstream tool_call_id.
+        """
+        mapping = ToolMapping(
+            external_id=external_id,
+            anthropic_id=anthropic_id,
+            name=name,
+            short_name=short_name,
+        )
+        self.mappings[external_id] = mapping
+        self.reverse_ids[anthropic_id] = external_id
+        self.name_to_id[name] = external_id
+
 
 @dataclass
 class StreamingState:
@@ -132,10 +151,7 @@ class StreamingState:
 
 @dataclass
 class TranslationContext:
-    """Context shared across translation pipeline.
-
-    Inspired by CLIProxyAPI's pipeline context pattern.
-    """
+    """Context shared across the translation pipeline."""
 
     # Protocol information
     source_protocol: str  # "anthropic"
@@ -151,7 +167,7 @@ class TranslationContext:
     # Streaming state
     streaming: StreamingState = field(default_factory=StreamingState)
 
-    # Translation parameters (like CLIProxyAPI's param *any)
+    # Translation parameters
     param: Any = None
 
     # Request tracking

@@ -137,7 +137,8 @@ class CodexExecutor(ProviderExecutor):
 
         self._log_upstream(url, headers, upstream_body)
 
-        stream = bool(self.request_body.get("stream", False))
+        # Always stream downstream to the client
+        stream = True
 
         try:
             async with self._client_session() as session:
@@ -196,7 +197,7 @@ class CodexExecutor(ProviderExecutor):
         self.context.reset_streaming()
 
         try:
-            # Process SSE line by line exactly like CLIProxyAPI bufio.Scanner
+            # Process SSE line-by-line with a scan buffer
             buffer = b""
 
             async for chunk in upstream.content.iter_any():
@@ -204,11 +205,11 @@ class CodexExecutor(ProviderExecutor):
                     continue
                 buffer += chunk
 
-                # Process each line immediately like CLIProxyAPI scanner.Scan()
+                # Process each line immediately
                 while b"\n" in buffer:
                     line, buffer = buffer.split(b"\n", 1)
 
-                    # Only process data: lines like CLIProxyAPI does
+                    # Only process data: lines
                     if line.startswith(b"data:"):
                         data_str = line[5:].strip()
                         if data_str and data_str != b"[DONE]":
@@ -234,7 +235,7 @@ class CodexExecutor(ProviderExecutor):
                                         await resp.write(frame)
                             except Exception as e:
                                 debug_log("Error parsing data line: %s", e)
-                    # Ignore event: lines and empty lines like CLIProxyAPI does
+                    # Ignore event: lines and empty lines
 
             # Properly close the stream
             await resp.write_eof()
@@ -247,7 +248,7 @@ class CodexExecutor(ProviderExecutor):
     async def _non_stream_response(self, upstream) -> web.StreamResponse:
         """Accumulate Codex SSE and return a single Anthropic JSON response.
 
-        Mirrors CLIProxyAPI: we scan the SSE and find the single 'response.completed' payload,
+        We scan the SSE and find the single 'response.completed' payload,
         then synthesize the final Claude message from it (no SSE framing here).
         """
         # Reset any prior streaming state

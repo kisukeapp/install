@@ -111,7 +111,7 @@ def anthropic_request_to_gemini(
     gemini_body = {
         "contents": [],
         "generationConfig": {
-            # Default thinkingConfig per CLIProxyAPI spec
+            # Default thinkingConfig
             "thinkingConfig": {
                 "include_thoughts": True,
                 "thinkingBudget": -1  # Auto mode by default
@@ -192,7 +192,7 @@ def anthropic_request_to_gemini(
             regular_messages.append(msg)
 
     # Add system instruction to Gemini format if we have any
-    # Per CLIProxyAPI spec, systemInstruction must be a Content object with role="user"
+    # systemInstruction must be a Content object with role="user"
     if system_parts:
         gemini_body["system_instruction"] = {
             "role": "user",
@@ -287,7 +287,7 @@ def anthropic_request_to_gemini(
 
     # Handle tools/functions declaration
     # IMPORTANT: ALL tools must be in ONE ToolDeclaration with multiple functionDeclarations
-    # Per CLIProxyAPI spec: tools = [{functionDeclarations: [tool1, tool2, ...]}]
+    # tools = [{functionDeclarations: [tool1, tool2, ...]}]
     if "tools" in request_body and request_body["tools"]:
         function_declarations = []
         for tool in request_body["tools"]:
@@ -657,7 +657,7 @@ def gemini_response_to_anthropic_streaming(
 def gemini_token_count_response(total_tokens: int) -> Dict[str, Any]:
     """Convert token count to Gemini format.
 
-    Returns Gemini-compatible token count response matching CLIProxyAPI format.
+    Gemini-compatible token count response.
     """
     return {
         "totalTokens": total_tokens,

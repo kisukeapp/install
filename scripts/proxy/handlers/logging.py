@@ -9,7 +9,7 @@ from .. import logging_control
 
 
 async def handle_get_logging(request: web.Request) -> web.Response:
-    """Return the current logging state for clients that expect CLIProxyAPI parity."""
+    """Return the current logging state."""
 
     return web.json_response({"enabled": logging_control.is_enabled()})
 

@@ -202,7 +202,7 @@ class OpenAIExecutor(ProviderExecutor):
         await resp.prepare(request)
 
         stub = new_message_stub(self.requested_model or self.cfg.model)
-        await resp.write(sse_event("message_start", {"message": stub}))
+        await resp.write(sse_event("message_start", {"type": "message_start", "message": stub}))
 
         tool_states: Dict[int, Dict[str, Any]] = {}
         finish_reason: Optional[str] = None
@@ -213,7 +213,12 @@ class OpenAIExecutor(ProviderExecutor):
             for state in tool_states.values():
                 if state.get("started") and not state.get("stopped"):
                     try:
-                        await resp.write(sse_event("content_block_stop", {"index": state["anth_index"]}))
+                        await resp.write(
+                            sse_event(
+                                "content_block_stop",
+                                {"type": "content_block_stop", "index": state["anth_index"]},
+                            )
+                        )
                     except (ConnectionResetError, ClientConnectionError) as exc:
                         if logging_control.is_enabled():
                             print(f"Client disconnected closing OpenAI tool block: {exc}")
@@ -237,7 +242,7 @@ class OpenAIExecutor(ProviderExecutor):
             if text:
                 try:
                     if not text_started:
-                        await resp.write(sse_event("content_block_start", {"index": 0, "type": "text"}))
+                        await resp.write(sse_event("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}))
                         text_started = True
                     await resp.write(
                         sse_event(
@@ -293,13 +298,7 @@ class OpenAIExecutor(ProviderExecutor):
                             await resp.write(
                                 sse_event(
                                     "content_block_start",
-                                    {
-                                        "index": state["anth_index"],
-                                        "type": "tool_use",
-                                        "id": state["anth_id"],
-                                        "name": state["name"],
-                                        "input": {},
-                                    },
+                                    {"type": "content_block_start", "index": state["anth_index"], "content_block": {"type": "tool_use", "id": state["anth_id"], "name": state["name"], "input": {}}},
                                 )
                             )
                             await resp.write(
@@ -356,7 +355,12 @@ class OpenAIExecutor(ProviderExecutor):
 
         if text_started:
             try:
-                await resp.write(sse_event("content_block_stop", {"index": 0}))
+                await resp.write(
+                    sse_event(
+                        "content_block_stop",
+                        {"type": "content_block_stop", "index": 0},
+                    )
+                )
             except (ConnectionResetError, ClientConnectionError) as exc:
                 if logging_control.is_enabled():
                     print(f"Client disconnected closing OpenAI text block: {exc}")
@@ -612,7 +616,7 @@ class ChatGPTExecutor(ProviderExecutor):
         tool_name_map = self._tool_name_reverse_map()
 
         stub = new_message_stub(self.requested_model or self.cfg.model)
-        await resp.write(sse_event("message_start", {"message": stub}))
+        await resp.write(sse_event("message_start", {"type": "message_start", "message": stub}))
 
         text_blocks: Dict[int, bool] = {}
         thinking_blocks: Dict[int, bool] = {}
@@ -652,13 +656,7 @@ class ChatGPTExecutor(ProviderExecutor):
                 await resp.write(
                     sse_event(
                         "content_block_start",
-                        {
-                            "index": state["index"],
-                            "type": "tool_use",
-                            "id": state["anth_id"],
-                            "name": state["name"],
-                            "input": {},
-                        },
+                        {"type": "content_block_start", "index": state["index"], "content_block": {"type": "tool_use", "id": state["anth_id"], "name": state["name"], "input": {}}},
                     )
                 )
                 await resp.write(
@@ -675,7 +673,12 @@ class ChatGPTExecutor(ProviderExecutor):
 
         async def stop_tool(state: Dict[str, Any]) -> None:
             if state.get("started") and not state.get("stopped"):
-                await resp.write(sse_event("content_block_stop", {"index": state["index"]}))
+                await resp.write(
+                    sse_event(
+                        "content_block_stop",
+                        {"type": "content_block_stop", "index": state["index"]},
+                    )
+                )
                 state["stopped"] = True
 
         try:
@@ -683,14 +686,14 @@ class ChatGPTExecutor(ProviderExecutor):
                 if event_name == "response.content_part.added":
                     index = event_data.get("output_index", 0)
                     if not text_blocks.get(index):
-                        await resp.write(sse_event("content_block_start", {"index": index, "type": "text"}))
+                        await resp.write(sse_event("content_block_start", {"type": "content_block_start", "index": index, "content_block": {"type": "text", "text": ""}}))
                         text_blocks[index] = True
                     continue
 
                 if event_name == "response.output_text.delta":
                     index = event_data.get("output_index", 0)
                     if not text_blocks.get(index):
-                        await resp.write(sse_event("content_block_start", {"index": index, "type": "text"}))
+                        await resp.write(sse_event("content_block_start", {"type": "content_block_start", "index": index, "content_block": {"type": "text", "text": ""}}))
                         text_blocks[index] = True
                     delta_text = event_data.get("delta", "") or ""
                     if delta_text:
@@ -705,20 +708,25 @@ class ChatGPTExecutor(ProviderExecutor):
                 if event_name == "response.content_part.done":
                     index = event_data.get("output_index", 0)
                     if text_blocks.pop(index, None):
-                        await resp.write(sse_event("content_block_stop", {"index": index}))
+                        await resp.write(
+                            sse_event(
+                                "content_block_stop",
+                                {"type": "content_block_stop", "index": index},
+                            )
+                        )
                     continue
 
                 if event_name == "response.reasoning_summary_part.added":
                     index = event_data.get("output_index", 0)
                     if not thinking_blocks.get(index):
-                        await resp.write(sse_event("content_block_start", {"index": index, "type": "thinking"}))
+                        await resp.write(sse_event("content_block_start", {"type": "content_block_start", "index": index, "content_block": {"type": "thinking", "thinking": "", "signature": ""}}))
                         thinking_blocks[index] = True
                     continue
 
                 if event_name == "response.reasoning_summary_text.delta":
                     index = event_data.get("output_index", 0)
                     if not thinking_blocks.get(index):
-                        await resp.write(sse_event("content_block_start", {"index": index, "type": "thinking"}))
+                        await resp.write(sse_event("content_block_start", {"type": "content_block_start", "index": index, "content_block": {"type": "thinking", "thinking": "", "signature": ""}}))
                         thinking_blocks[index] = True
                     delta_text = event_data.get("delta", "") or ""
                     if delta_text:
@@ -733,7 +741,12 @@ class ChatGPTExecutor(ProviderExecutor):
                 if event_name == "response.reasoning_summary_part.done":
                     index = event_data.get("output_index", 0)
                     if thinking_blocks.pop(index, None):
-                        await resp.write(sse_event("content_block_stop", {"index": index}))
+                        await resp.write(
+                            sse_event(
+                                "content_block_stop",
+                                {"type": "content_block_stop", "index": index},
+                            )
+                        )
                     continue
 
                 if event_name == "response.output_item.added":

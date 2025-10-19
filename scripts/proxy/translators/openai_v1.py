@@ -103,8 +103,12 @@ def anthropic_request_to_openai_v1(
 
                         # Generate OpenAI-style ID
                         openai_id = f"call_{uuid.uuid4().hex[:16]}"
-                        # Register mapping
-                        anthropic_tool_id = context.tools.register_tool(openai_id, name)
+                        # Link this tool call with the original Anthropic tool_use ID
+                        if anthropic_id:
+                            context.tools.link_anthropic_to_external(anthropic_id, openai_id, name)
+                        else:
+                            # Fallback: register mapping if no Anthropic ID present
+                            context.tools.register_tool(openai_id, name)
 
                         tool_calls.append({
                             "id": openai_id,
@@ -140,7 +144,7 @@ def anthropic_request_to_openai_v1(
     # Tool choice
     tool_choice = body.get("tool_choice")
     if tool_choice == "none":
-        # Don't send tool_choice for "none" - matches CLIProxyAPI
+        # Don't send tool_choice for "none"
         pass
     elif tool_choice in ("auto", "any"):
         request["tool_choice"] = "auto"
@@ -187,6 +191,7 @@ def openai_v1_response_to_anthropic_streaming(
         context.param = {"message_started": True}
         msg_id = chunk.get("id", f"msg_{uuid.uuid4().hex}")
         events.append(("message_start", {
+            "type": "message_start",
             "message": {
                 "id": msg_id,
                 "type": "message",
@@ -211,12 +216,14 @@ def openai_v1_response_to_anthropic_streaming(
             if not context.streaming.text_started:
                 idx = context.streaming.get_text_index()
                 events.append(("content_block_start", {
+                    "type": "content_block_start",
                     "index": idx,
-                    "type": "text",
+                    "content_block": {"type": "text", "text": ""},
                 }))
                 context.streaming.text_started = True
 
             events.append(("content_block_delta", {
+                "type": "content_block_delta",
                 "index": context.streaming.text_index,
                 "delta": {"type": "text_delta", "text": text},
             }))
@@ -258,14 +265,18 @@ def openai_v1_response_to_anthropic_streaming(
                 # Start block if needed
                 if not state["started"] and state["anth_id"] and state["name"]:
                     events.append(("content_block_start", {
+                        "type": "content_block_start",
                         "index": state["anth_index"],
-                        "type": "tool_use",
-                        "id": state["anth_id"],
-                        "name": state["name"],
-                        "input": {},
+                        "content_block": {
+                            "type": "tool_use",
+                            "id": state["anth_id"],
+                            "name": state["name"],
+                            "input": {},
+                        },
                     }))
                     # Send initial empty delta
                     events.append(("content_block_delta", {
+                        "type": "content_block_delta",
                         "index": state["anth_index"],
                         "delta": {"type": "input_json_delta", "partial_json": ""},
                     }))
@@ -287,6 +298,7 @@ def openai_v1_response_to_anthropic_streaming(
 
                     if delta_args:
                         events.append(("content_block_delta", {
+                            "type": "content_block_delta",
                             "index": state["anth_index"],
                             "delta": {"type": "input_json_delta", "partial_json": delta_args},
                         }))
@@ -296,12 +308,12 @@ def openai_v1_response_to_anthropic_streaming(
         if finish_reason:
             # Close open blocks
             if context.streaming.text_started:
-                events.append(("content_block_stop", {"index": context.streaming.text_index}))
+                events.append(("content_block_stop", {"type": "content_block_stop", "index": context.streaming.text_index}))
                 context.streaming.text_started = False
 
             for state in context.streaming.tool_states.values():
                 if state["started"] and not state["stopped"]:
-                    events.append(("content_block_stop", {"index": state["anth_index"]}))
+                    events.append(("content_block_stop", {"type": "content_block_stop", "index": state["anth_index"]}))
                     state["stopped"] = True
 
             # Map finish reason
@@ -324,6 +336,7 @@ def openai_v1_response_to_anthropic_streaming(
 
         if context.streaming.finish_reason:
             events.append(("message_delta", {
+                "type": "message_delta",
                 "delta": {"stop_reason": context.streaming.finish_reason},
                 "usage": {
                     "input_tokens": context.streaming.input_tokens or 0,

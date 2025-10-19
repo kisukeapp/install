@@ -112,7 +112,7 @@ class GeminiCLIExecutor(ProviderExecutor):
 
         url = f"{base}/{self.API_VERSION}:{action}"
 
-        # Add alt parameter for SSE streaming per CLIProxyAPI spec
+        # Add alt parameter for SSE streaming
         # When alt="", add ?alt=sse for true SSE mode
         # When alt has value, add ?$alt={value} for custom mode
         if self.alt == "" and action == "streamGenerateContent":
@@ -126,7 +126,7 @@ class GeminiCLIExecutor(ProviderExecutor):
         """Build request headers for Gemini CLI."""
         headers = {
             "Content-Type": "application/json",
-            # Required headers for Gemini CLI (from CLIProxyAPI)
+            # Required headers for Gemini CLI
             "User-Agent": "google-api-nodejs-client/9.15.1",
             "X-Goog-Api-Client": "gl-node/22.17.0",
             "Client-Metadata": "ideType=IDE_UNSPECIFIED,platform=PLATFORM_UNSPECIFIED,pluginType=GEMINI",
@@ -179,8 +179,8 @@ class GeminiCLIExecutor(ProviderExecutor):
                 status=400,
             )
 
-        # Determine the action based on request metadata or streaming
-        stream = bool(self.request_body.get("stream", False))
+        # Determine the action for upstream, but always stream downstream
+        stream = True
         action = "generateContent"
 
         # Check for special actions in metadata
@@ -315,7 +315,11 @@ class GeminiCLIExecutor(ProviderExecutor):
 
                         # Success! Handle response
                         if stream or self.alt:
-                            return await self._stream_response(request, upstream)
+                            # Fallback to synthesized SSE if upstream is not streaming
+                            ctype = (upstream.headers.get("Content-Type") or "").lower()
+                            if "text/event-stream" in ctype:
+                                return await self._stream_response(request, upstream)
+                            return await self._non_stream_as_sse(request, upstream)
                         else:
                             return await self._non_stream_response(upstream)
 
@@ -454,6 +458,35 @@ class GeminiCLIExecutor(ProviderExecutor):
         await resp.write_eof()
         return resp
 
+    async def _non_stream_as_sse(self, request: web.Request, upstream) -> web.StreamResponse:
+        """Fallback: upstream returned JSON; stream synthesized SSE to client."""
+        try:
+            gemini_cli_response = await upstream.json()
+
+            # Convert to Anthropic final message via CLI translator wrapper
+            anthropic_response = gemini_cli_response_to_anthropic(gemini_cli_response)
+
+            # Attach metadata if configured
+            if self.metadata:
+                anthropic_response.setdefault("metadata", self.metadata)
+
+            # Stream synthesized SSE frames
+            resp = web.StreamResponse(headers={"Content-Type": "text/event-stream"})
+            await resp.prepare(request)
+
+            from ..sse import frames_from_final_message
+            for frame in frames_from_final_message(anthropic_response):
+                await resp.write(frame)
+
+            await resp.write_eof()
+            return resp
+        except Exception as e:
+            debug_log("Fallback SSE error (CLI): %s", str(e))
+            return web.json_response(
+                anthropic_error_payload(f"Failed to process response: {str(e)}", "api_error"),
+                status=500,
+            )
+
     async def count_tokens(self, request: web.Request) -> web.Response:
         """Count tokens for a request using Gemini CLI API with model fallback."""
         from ..translators.gemini_cli import gemini_cli_token_count_response
@@ -500,7 +533,7 @@ class GeminiCLIExecutor(ProviderExecutor):
             # Clone gemini_body for this attempt
             gemini_body = copy.deepcopy(base_gemini_body)
 
-            # For countTokens, DELETE project and model fields (per CLIProxyAPI spec)
+            # For countTokens, DELETE project and model fields
             gemini_body.pop("project", None)
             gemini_body.pop("model", None)
 
