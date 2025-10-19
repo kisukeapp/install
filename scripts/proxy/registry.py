@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 from dataclasses import dataclass
 
 from .config import ModelConfig
@@ -75,10 +75,20 @@ def clear_routes() -> None:
     _ROUTES.clear()
 
 
+def list_routes() -> List[ModelConfig]:
+    """Return a snapshot list of all current route configurations.
+
+    This exposes the current configs without requiring an auth token, useful for
+    endpoints like /v1/models that need to advertise available models.
+    """
+    return [state.current for state in _ROUTES.values()]
+
+
 __all__ = [
     "register_route",
     "get_route",
     "update_credentials",
     "unregister_route",
     "clear_routes",
+    "list_routes",
 ]

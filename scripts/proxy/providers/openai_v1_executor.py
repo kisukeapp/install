@@ -111,6 +111,16 @@ class OpenAIV1Executor(ProviderExecutor):
             if reasoning_level and reasoning_level.lower() in ["low", "medium", "high"]:
                 upstream_body["reasoning_effort"] = reasoning_level.lower()
 
+        # Provider-specific adjustments
+        # GROQ: omit max_tokens entirely and let the model choose defaults to avoid 400s
+        if (self.cfg.provider or "").lower() == "groq":
+            if "max_tokens" in upstream_body:
+                upstream_body.pop("max_tokens", None)
+                debug_log("Removed max_tokens for GROQ provider to use model default")
+
+        # Request upstream streaming when possible
+        upstream_body["stream"] = True
+
         # Build request
         url = self._build_url()
         auth = resolve_auth_strategy(self.cfg.provider, self.cfg)
@@ -118,12 +128,21 @@ class OpenAIV1Executor(ProviderExecutor):
 
         self._log_upstream(url, headers, upstream_body)
 
-        stream = bool(self.request_body.get("stream", False))
+        # Always stream downstream to the client
+        stream = True
 
         try:
             async with self._client_session() as session:
                 async with session.post(url, json=upstream_body, headers=headers) as upstream:
                     debug_log("Upstream response: status=%s", upstream.status)
+                    # Detailed upstream response logging (parity with Anthropic executor)
+                    if logging_control.is_enabled():
+                        try:
+                            print("\nUPSTREAM RESPONSE:")
+                            print(f"   Status: {upstream.status}")
+                            print(f"   Headers: {dict(upstream.headers)}")
+                        except Exception:
+                            pass
 
                     if upstream.status >= 400:
                         error_body = await self._read_json(upstream)
@@ -153,7 +172,11 @@ class OpenAIV1Executor(ProviderExecutor):
                         )
 
                     if stream:
-                        return await self._stream_response(request, upstream)
+                        # Fallback: if upstream didn't stream, synthesize SSE from JSON
+                        ctype = (upstream.headers.get("Content-Type") or "").lower()
+                        if "text/event-stream" in ctype:
+                            return await self._stream_response(request, upstream)
+                        return await self._non_stream_as_sse(request, upstream)
                     return await self._non_stream_response(upstream)
 
         except asyncio.CancelledError:
@@ -175,9 +198,21 @@ class OpenAIV1Executor(ProviderExecutor):
 
         # Reset streaming context
         self.context.reset_streaming()
+        preview_text = ""
+        last_chunk: Dict[str, Any] = {}
 
         try:
             async for chunk in iter_openai_sse(upstream):
+                try:
+                    choices = chunk.get("choices", [])
+                    if choices:
+                        delta = choices[0].get("delta", {})
+                        t = delta.get("content") or ""
+                        if t:
+                            preview_text = (preview_text + t)[-400:]
+                except Exception:
+                    pass
+
                 # Log tool calls if present
                 choices = chunk.get("choices", [])
                 if choices:
@@ -196,9 +231,88 @@ class OpenAIV1Executor(ProviderExecutor):
                 # Send Anthropic events
                 for event_type, data in anthropic_events:
                     await resp.write(sse_event(event_type, data))
+                last_chunk = chunk
 
         except (ConnectionResetError, ClientConnectionError) as exc:
             debug_log("Client disconnected during OpenAI v1 streaming: %s", exc)
+
+        # Emit a concise summary of the final upstream chunk for debugging
+        if logging_control.is_enabled():
+            try:
+                print("\nUPSTREAM FINAL CHUNK SUMMARY:")
+                finish = getattr(self.context.streaming, "finish_reason", None)
+                usage = {
+                    "input_tokens": getattr(self.context.streaming, "input_tokens", None),
+                    "output_tokens": getattr(self.context.streaming, "output_tokens", None),
+                }
+                if finish:
+                    print(f"   Finish: {finish}")
+                if usage.get("input_tokens") is not None or usage.get("output_tokens") is not None:
+                    print(f"   Usage: {usage}")
+                if preview_text:
+                    print(f"   Text Preview: {preview_text}")
+                elif last_chunk:
+                    try:
+                        snippet = json.dumps(last_chunk, ensure_ascii=False)
+                        if len(snippet) > 400:
+                            snippet = snippet[:400] + "..."
+                        print(f"   Last Chunk JSON: {snippet}")
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        # Fallback finalization: if upstream ended but we never sent a final
+        # message because usage was absent, emit a minimal tail to close out
+        # the stream to the client.
+        try:
+            # Close any open text block
+            if self.context.streaming.text_started and self.context.streaming.text_index is not None:
+                await resp.write(
+                    sse_event(
+                        "content_block_stop",
+                        {"type": "content_block_stop", "index": self.context.streaming.text_index},
+                    )
+                )
+                self.context.streaming.text_started = False
+
+            # Close any open tool blocks (based on translator state)
+            for st in getattr(self.context.streaming, "tool_states", {}).values():
+                if isinstance(st, dict) and st.get("started") and not st.get("stopped"):
+                    anth_index = st.get("anth_index")
+                    if anth_index is not None:
+                        await resp.write(
+                            sse_event(
+                                "content_block_stop",
+                                {"type": "content_block_stop", "index": anth_index},
+                            )
+                        )
+                    st["stopped"] = True
+
+            # If we have a finish_reason but no usage, still emit message tail
+            if self.context.streaming.finish_reason and (
+                self.context.streaming.input_tokens is None and self.context.streaming.output_tokens is None
+            ):
+                await resp.write(
+                    sse_event(
+                        "message_delta",
+                        {
+                            "type": "message_delta",
+                            "delta": {"stop_reason": self.context.streaming.finish_reason},
+                            "usage": {"input_tokens": 0, "output_tokens": 0},
+                        },
+                    )
+                )
+                await resp.write(sse_event("message_stop", {"type": "message_stop"}))
+        except (ConnectionResetError, ClientConnectionError):
+            # Client disconnected while sending fallback tail; ignore
+            pass
+
+        # Close the SSE stream explicitly
+        try:
+            await resp.write_eof()
+        except Exception:
+            pass
 
         return resp
 
@@ -228,3 +342,25 @@ class OpenAIV1Executor(ProviderExecutor):
         )
 
         return web.json_response(anthropic_response)
+
+    async def _non_stream_as_sse(self, request: web.Request, upstream) -> web.StreamResponse:
+        """Fallback: upstream returned JSON; stream synthesized SSE to client."""
+        payload = await upstream.json()
+
+        # Convert to Anthropic final message
+        anthropic_response = openai_v1_response_to_anthropic(payload, self.context)
+
+        # Attach metadata if configured
+        if self.metadata:
+            anthropic_response.setdefault("metadata", self.metadata)
+
+        # Stream synthesized SSE frames
+        resp = web.StreamResponse(status=200, headers={"Content-Type": "text/event-stream"})
+        await resp.prepare(request)
+
+        from ..sse import frames_from_final_message
+        for frame in frames_from_final_message(anthropic_response):
+            await resp.write(frame)
+
+        await resp.write_eof()
+        return resp

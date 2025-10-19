@@ -249,7 +249,7 @@ def anthropic_request_to_codex(
                         orig_to_short.setdefault(original_name, short_name)
 
                     input_obj = block.get("input") or {}
-                    # arguments must be a JSON string (like CLIProxyAPI's .Raw)
+                    # arguments must be a JSON string
                     input_messages.append(
                         {
                             "type": "function_call",

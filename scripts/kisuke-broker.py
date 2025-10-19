@@ -16,16 +16,16 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from broker import KisukeBroker
-from broker.config import PORT, LOG_LEVEL
+from broker.config import PORT
 from broker.utils import setup_logging
 
 def main():
     """Main entry point."""
-    # Setup logging
-    setup_logging(LOG_LEVEL)
+    # Setup logging (KISUKE_DEBUG=1 forces DEBUG level)
+    setup_logging()
     
-    # Get port from environment or use default
-    port = int(os.getenv("BROKER_PORT", PORT))
+    # Use configured port (BROKER_PORT env is read in broker.config)
+    port = PORT
     
     # Create and run broker
     broker = KisukeBroker(port=port)

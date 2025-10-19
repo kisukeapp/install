@@ -24,6 +24,7 @@ from .permissions import PermissionHandler
 from .health import HealthHandler
 from .ack import AckHandler
 from .conversations import ConversationHandler
+from .sync import SyncHandler
 
 log = logging.getLogger(__name__)
 
@@ -94,6 +95,10 @@ class MessageHandlers:
             broker, session_manager, connection_manager, message_buffer,
             route_manager, claude_interface, self.ack_manager
         )
+        self.sync_handler = SyncHandler(
+            broker, session_manager, connection_manager, message_buffer,
+            route_manager, claude_interface, self.ack_manager
+        )
 
     async def handle_connection(self, ws: WebSocketServerProtocol, path: str):
         """
@@ -150,6 +155,8 @@ class MessageHandlers:
                         await self.permission_handler.handle_permission_response(data, ws)
                     elif msg_type == MessageType.STATUS:
                         await self.health_handler.handle_status(ws)
+                    elif msg_type == MessageType.SYNC:
+                        await self.sync_handler.handle_sync(data, ws)
                     elif msg_type == MessageType.RESPONSE_ACK:
                         await self.ack_handler.handle_response_ack(data, ws)
                     elif msg_type == MessageType.EDIT_MESSAGE:

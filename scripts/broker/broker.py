@@ -7,12 +7,13 @@ import logging
 import sys
 from pathlib import Path
 import websockets
+import html
 
 # Add proxy module to path if needed
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from .config import *
-from .utils import setup_logging, get_claude_cli_path
+from .utils import setup_logging, get_claude_cli_path, get_log_text, is_debug_logging_enabled
 from .core.session_manager import SessionManager
 from .core.connection_manager import ConnectionManager
 from .core.message_buffer import MessageBuffer
@@ -112,6 +113,7 @@ class KisukeBroker:
             connection_handler,
             HOST,
             self.port,
+            process_request=self._process_http_request,
             ping_interval=None,  # Disable server-initiated pings - iOS manages heartbeat
             ping_timeout=None,   # No timeout for pongs - permanent connections
             close_timeout=10,    # Clean shutdown timeout only
@@ -140,7 +142,7 @@ class KisukeBroker:
             log.info(f"Using Claude CLI at {claude_path}")
 
         self.running = True
-    
+
     async def stop(self):
         """Stop the broker and all components."""
         if not self.running:
@@ -164,7 +166,7 @@ class KisukeBroker:
         
         self.running = False
         log.info("Kisuke Broker stopped")
-    
+
     async def run_forever(self):
         """Run the broker until interrupted."""
         await self.start()
@@ -177,7 +179,7 @@ class KisukeBroker:
             log.info("Received interrupt signal")
         finally:
             await self.stop()
-    
+
     async def _start_proxy(self):
         """Start the embedded proxy server."""
         try:
@@ -190,7 +192,7 @@ class KisukeBroker:
             log.warning("Proxy module not found - running without proxy")
         except Exception as e:
             log.error(f"Failed to start proxy: {e}")
-    
+
     async def _stop_proxy(self):
         """Stop the embedded proxy server."""
         if self.proxy_runner:
@@ -199,12 +201,95 @@ class KisukeBroker:
                 log.info("Proxy stopped")
             except Exception as e:
                 log.error(f"Error stopping proxy: {e}")
+
+    async def _process_http_request(self, path, request_headers):  # type: ignore[override]
+        """Serve minimal HTTP endpoints on the WebSocket port.
+
+        - GET /logs: show recent broker logs when DEBUG logging is enabled.
+        Returning None allows the WebSocket handshake to proceed.
+        """
+        # Normalize path to string
+        p = str(path or "/")
+
+        # Let WebSocket handshake proceed for all non-/logs paths
+        if p == "/" or p.startswith("/ws") or (not p.startswith("/logs")):
+            return None
+
+        # Only handle /logs here
+        try:
+            if not is_debug_logging_enabled():
+                body = b"Logs available only when KISUKE_DEBUG=1.\n"
+                return _build_ws_response(
+                    404,
+                    [("Content-Type", "text/plain; charset=utf-8"), ("Cache-Control", "no-store")],
+                    body,
+                )
+
+            logs = get_log_text()
+            html = f"""
+<!doctype html>
+<html>
+  <head>
+    <meta charset=\"utf-8\" />
+    <title>Kisuke Broker Logs</title>
+    <style>
+      body {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0; }}
+      #top {{ position: sticky; top: 0; background: #f7f7f7; border-bottom: 1px solid #ddd; padding: 8px; display:flex; gap:8px; align-items:center; }}
+      #logs {{ white-space: pre-wrap; word-wrap: break-word; padding: 12px; }}
+      button {{ padding: 6px 10px; cursor: pointer; }}
+      .note {{ color:#666; font-size:12px; margin-left:8px; }}
+    </style>
+  </head>
+  <body>
+    <div id=\"top\">
+      <button id=\"copy\">Copy</button>
+      <span class=\"note\">Debug logs (word-wrapped). Refresh to update.</span>
+    </div>
+    <pre id=\"logs\">{html.escape(logs)}</pre>
+    <script>
+      const btn = document.getElementById('copy');
+      btn.addEventListener('click', async () => {{
+        try {{
+          const text = document.getElementById('logs').innerText;
+          await navigator.clipboard.writeText(text);
+          btn.textContent = 'Copied!';
+          setTimeout(() => btn.textContent = 'Copy', 1500);
+        }} catch (e) {{
+          btn.textContent = 'Copy failed';
+          setTimeout(() => btn.textContent = 'Copy', 1500);
+        }}
+      }});
+    </script>
+  </body>
+</html>
+"""
+            body = html.encode("utf-8", errors="ignore")
+            return _build_ws_response(
+                200,
+                [("Content-Type", "text/html; charset=utf-8"), ("Cache-Control", "no-store")],
+                body,
+            )
+        except Exception as e:
+            body = f"/logs handler error: {e}\n".encode("utf-8", errors="ignore")
+            return _build_ws_response(
+                500,
+                [("Content-Type", "text/plain; charset=utf-8"), ("Cache-Control", "no-store")],
+                body,
+            )
+
+# Build a websockets 15.x HTTP Response with proper Headers type
+def _build_ws_response(status: int, headers: list[tuple[str, str]], body: bytes):
+    from websockets.http import Response  # type: ignore
+    from websockets.datastructures import Headers  # type: ignore
+
+    return Response(status=status, headers=Headers(headers), body=body)
     
 
 async def main():
     """Main entry point for the broker."""
-    setup_logging(LOG_LEVEL)
-    
+    # Honor KISUKE_DEBUG=1 for debug logging
+    setup_logging()
+
     broker = KisukeBroker()
     await broker.run_forever()
 

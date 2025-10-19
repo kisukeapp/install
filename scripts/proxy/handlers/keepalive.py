@@ -6,7 +6,7 @@ from aiohttp import web
 
 
 async def handle_keep_alive(request: web.Request) -> web.Response:
-    """Mirror CLIProxyAPI's keep-alive endpoint with a lightweight response."""
+    """Lightweight response."""
 
     return web.json_response({"status": "ok"})
 

@@ -1,6 +1,5 @@
 """Provider executor factory with protocol-based routing.
 
-Following CLIProxyAPI's pattern:
 - provider=='openai' -> Codex protocol (ChatGPT backend)
 - provider=='anthropic' -> Native Anthropic API protocol
 - provider=='google' -> Routes based on auth_method:

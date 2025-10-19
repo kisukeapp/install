@@ -82,7 +82,8 @@ class AnthropicExecutor(ProviderExecutor):
 
         self._log_upstream(url, headers, body)
 
-        stream = bool(self.request_body.get("stream", False))
+        # Always stream downstream to the client
+        stream = True
 
         try:
             async with self._client_session() as session:
@@ -116,7 +117,7 @@ class AnthropicExecutor(ProviderExecutor):
                         resp = web.StreamResponse(status=200, headers={"Content-Type": "text/event-stream"})
                         await resp.prepare(request)
 
-                        # Process line by line exactly like CLIProxyAPI
+                        # Process line by line
                         buffer = b""
                         try:
                             async for chunk in upstream.content.iter_any():

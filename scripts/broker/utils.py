@@ -6,6 +6,8 @@ import sys
 import json
 import uuid
 import logging
+import threading
+from collections import deque
 import subprocess
 from pathlib import Path
 from typing import Optional, Any, Dict, List
@@ -196,11 +198,19 @@ def get_claude_cli_path() -> Optional[str]:
     return os.path.expanduser("~/.kisuke/bin/claude")
 
 def setup_logging(level: str = "INFO") -> None:
-    """Set up logging configuration."""
+    """Set up logging configuration.
+
+    Honors KISUKE_DEBUG=1 as the central flag: when set, force DEBUG level
+    regardless of the provided level parameter.
+    """
     from .config import LOG_FORMAT, LOG_DATE_FORMAT
 
+    effective_level = logging.DEBUG if os.getenv("KISUKE_DEBUG", "0") == "1" else getattr(
+        logging, (level or "INFO").upper(), logging.INFO
+    )
+
     logging.basicConfig(
-        level=getattr(logging, level.upper(), logging.INFO),
+        level=effective_level,
         format=LOG_FORMAT,
         datefmt=LOG_DATE_FORMAT
     )
@@ -218,6 +228,67 @@ def setup_logging(level: str = "INFO") -> None:
 
     websockets_logger = logging.getLogger('websockets.server')
     websockets_logger.addFilter(WebSocketHandshakeFilter())
+
+    # Attach in-memory log buffer for debug viewing via /logs
+    try:
+        _attach_memory_log_handler(LOG_FORMAT, LOG_DATE_FORMAT)
+    except Exception:
+        # Non-fatal: logging still works without memory buffer
+        pass
+
+# ---------------- In-memory broker log buffer -----------------
+
+_LOG_HANDLER = None  # type: ignore[var-annotated]
+
+
+class _InMemoryLogHandler(logging.Handler):
+    """Ring buffer log handler storing formatted log lines in memory."""
+
+    def __init__(self, capacity: int, formatter: logging.Formatter):
+        super().__init__(level=logging.DEBUG)
+        self.capacity = int(capacity)
+        self.buffer = deque(maxlen=self.capacity)
+        self._lock = threading.Lock()
+        self.setFormatter(formatter)
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            line = self.format(record)
+        except Exception:
+            line = record.getMessage()
+        with self._lock:
+            self.buffer.append(line)
+
+    def get_text(self) -> str:
+        with self._lock:
+            return "\n".join(self.buffer)
+
+
+def _attach_memory_log_handler(fmt: str, datefmt: str) -> None:
+    """Attach a single in-memory handler to the root logger."""
+    global _LOG_HANDLER
+    if _LOG_HANDLER is not None:
+        return
+    formatter = logging.Formatter(fmt=fmt, datefmt=datefmt)
+    capacity = int(os.getenv("BROKER_LOG_BUFFER", "5000"))
+    handler = _InMemoryLogHandler(capacity=capacity, formatter=formatter)
+    root = logging.getLogger()
+    root.addHandler(handler)
+    _LOG_HANDLER = handler
+
+
+def get_log_text() -> str:
+    """Return current in-memory broker logs as a single string."""
+    if _LOG_HANDLER and hasattr(_LOG_HANDLER, "get_text"):
+        return _LOG_HANDLER.get_text()  # type: ignore[attr-defined]
+    return "<log buffer unavailable>"
+
+
+def is_debug_logging_enabled() -> bool:
+    """True when effective root level is DEBUG (or lower)."""
+    if os.getenv("KISUKE_DEBUG", "0") == "1":
+        return True
+    return logging.getLogger().getEffectiveLevel() <= logging.DEBUG
 
 
 # Conversation history utilities

@@ -9,6 +9,7 @@ from .handlers.models import handle_models
 from .handlers.keepalive import handle_keep_alive
 from .handlers.logging import handle_get_logging, handle_set_logging
 from .handlers.messages import handle_messages
+from .handlers.count_tokens import handle_count_tokens
 
 
 def make_app() -> web.Application:
@@ -19,6 +20,7 @@ def make_app() -> web.Application:
     app.router.add_post("/logging", handle_set_logging)
     app.router.add_get("/v1/models", handle_models)
     app.router.add_post("/v1/messages", handle_messages)
+    app.router.add_post("/v1/messages/count_tokens", handle_count_tokens)
     return app
 
 
