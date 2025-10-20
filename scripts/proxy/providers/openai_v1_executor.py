@@ -118,6 +118,20 @@ class OpenAIV1Executor(ProviderExecutor):
                 upstream_body.pop("max_tokens", None)
                 debug_log("Removed max_tokens for GROQ provider to use model default")
 
+        # AZURE: for GPT-named deployments, Azure expects "max_completion_tokens"
+        # instead of "max_tokens" when using Chat Completions-compatible payloads.
+        if (self.cfg.provider or "").lower() == "azure":
+            model_name = (
+                upstream_body.get("model")
+                or (self.cfg.model or self.requested_model or "")
+            )
+            if isinstance(model_name, str) and "gpt" in model_name.lower():
+                if "max_tokens" in upstream_body:
+                    upstream_body["max_completion_tokens"] = upstream_body.pop("max_tokens")
+                    debug_log(
+                        "Azure GPT: mapped max_tokens -> max_completion_tokens"
+                    )
+
         # Request upstream streaming when possible
         upstream_body["stream"] = True
 
