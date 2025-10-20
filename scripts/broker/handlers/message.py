@@ -66,7 +66,7 @@ class MessageHandler(BaseHandler):
                     self.broker, self.session_manager, self.connection_manager,
                     self.message_buffer, self.route_manager, self.claude_interface, self.ack_manager
                 )
-                await cred_handler.request_credentials_from_ios(ws)
+                await cred_handler.request_credentials_from_ios(ws, session.tab_id)
                 await self._send_error(
                     ws, "Credentials required - requesting from iOS",
                     session.tab_id, ErrorCode.NO_ACTIVE_ROUTE
@@ -325,8 +325,8 @@ class MessageHandler(BaseHandler):
                 await claude_session.client.interrupt()
                 log.info(f"Sent interrupt to Claude session {session.session_id}")
 
-                # Acknowledge to iOS with sequence
-                ack_seq = await self.ack_manager.get_next_broker_seq(session.session_id)
+                # Acknowledge to iOS with sequence (tabId namespace)
+                ack_seq = await self.ack_manager.get_next_broker_seq(session.tab_id)
                 await self._send(ws, {
                     'type': 'interrupt_acknowledged',
                     'tabId': session.tab_id,

@@ -26,9 +26,14 @@ def main():
     
     # Use configured port (BROKER_PORT env is read in broker.config)
     port = PORT
-    
-    # Create and run broker
-    broker = KisukeBroker(port=port)
+
+    # Allow host override via KHOST env (passed inline by iOS)
+    host = os.getenv("KHOST")
+    if host:
+        print(f"Using KHOST={host} for broker binding")
+
+    # Create and run broker with host binding (falls back to 127.0.0.1 if needed)
+    broker = KisukeBroker(port=port, host=host)
     
     try:
         asyncio.run(broker.run_forever())

@@ -21,8 +21,8 @@ class AckHandler(BaseHandler):
 
         seq = data.get('seq')
         if seq is not None:
-            # Acknowledge message in buffer
-            await self.session_manager.acknowledge_message(session.session_id, seq)
-            # Also update ACK manager
-            await self.ack_manager.ack_from_ios(session.session_id, seq)
-            log.debug(f"iOS acknowledged message seq={seq} for session {session.session_id}")
+            # Acknowledge messages cumulatively in buffer (buffer keyed by session_id)
+            await self.session_manager.acknowledge_up_to(session.session_id, seq)
+            # Also update ACK manager using tabId namespace
+            await self.ack_manager.ack_from_ios(session.tab_id, seq)
+            log.debug(f"iOS acknowledged up to seq={seq} for tab {session.tab_id} (session {session.session_id})")

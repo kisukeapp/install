@@ -299,23 +299,20 @@ class SessionManager:
         Returns:
             Tuple of (successful sends, failed sends)
         """
-        # Get sequence number from AckManager if available
+        # Resolve tab_id for iOS-visible sequencing (fallback to session if missing)
+        session = await self.get_session(session_id)
+        tab_id = (message.get('tabId') if isinstance(message, dict) else None) or (session.tab_id if session else None)
+
+        # Determine broker→iOS sequence number from AckManager when available
+        seq = None
         if hasattr(self, 'ack_manager') and self.ack_manager:
-            seq = await self.ack_manager.get_next_broker_seq(session_id)
-        else:
-            # Fallback to buffer's sequence
-            msg = await self.message_buffer.add_message(session_id, message)
-            seq = msg.seq
+            seq = await self.ack_manager.get_next_broker_seq(tab_id or session_id)
 
-        # Add to buffer if not already added
-        if not (hasattr(self, 'ack_manager') and self.ack_manager):
-            msg = await self.message_buffer.add_message(session_id, message)
-        else:
-            # Still add to buffer for persistence
-            await self.message_buffer.add_message(session_id, message)
+        # Buffer the message with the chosen sequence (preserves seq across replay)
+        buffered_msg = await self.message_buffer.add_message(session_id, message, seq=seq)
 
-        # Add sequence number to message
-        message['seq'] = seq
+        # Ensure message includes seq for immediate delivery
+        message['seq'] = buffered_msg.seq
 
         # Send via connection manager
         successful, failed = await self.connection_manager.send_to_session(session_id, message)
@@ -345,27 +342,31 @@ class SessionManager:
         Returns:
             Tuple of (successful sends, failed sends)
         """
-        # Get sequence number from AckManager
+        # Resolve tab_id for iOS-visible sequencing (prefer provided tab_id)
+        if not tab_id:
+            sess = await self.get_session(session_id)
+            tab_id = sess.tab_id if sess else None
+
+        # Get broker→iOS sequence number (tab-based) when AckManager is available
+        seq = None
         if hasattr(self, 'ack_manager') and self.ack_manager:
-            seq = await self.ack_manager.get_next_broker_seq(session_id)
-        else:
-            # Fallback to buffer's sequence
-            seq = self.message_buffer._get_next_seq(session_id)
+            seq = await self.ack_manager.get_next_broker_seq(tab_id or session_id)
 
         # Create batch message
         batch_message = {
             'type': message_type,
             'events': events,
             'eventCount': len(events),
-            'seq': seq
+            # seq will be set after buffering to the assigned broker seq
         }
 
         # Add tabId for iOS routing if provided
         if tab_id:
             batch_message['tabId'] = tab_id
 
-        # Add to buffer for persistence
-        await self.message_buffer.add_message(session_id, batch_message)
+        # Add to buffer with broker seq (preserves seq across replay)
+        buffered_msg = await self.message_buffer.add_message(session_id, batch_message, seq=seq)
+        batch_message['seq'] = buffered_msg.seq
 
         # Send via connection manager
         successful, failed = await self.connection_manager.send_to_session(session_id, batch_message)
@@ -422,12 +423,12 @@ class SessionManager:
         if not session:
             return
 
-        # Get last acknowledged sequence from session's ack_manager (persistent state)
+        # Get last acknowledged sequence from tab's ack_manager (persistent state)
         # NOT from connection's client_info (ephemeral, lost on reconnect)
         if hasattr(self, 'ack_manager') and self.ack_manager:
-            ack_state = await self.ack_manager.get_or_create_state(session_id)
+            ack_state = await self.ack_manager.get_or_create_state(session.tab_id)
             last_ack = ack_state.ios_last_acked
-            log.info(f"Using session ack state: ios_last_acked={last_ack} for session {session_id}")
+            log.info(f"Using tab ack state: ios_last_acked={last_ack} for tab {session.tab_id} (session {session_id})")
         else:
             # Fallback: no ack manager, replay all
             last_ack = -1
@@ -441,8 +442,8 @@ class SessionManager:
 
             # Send sync_status at start of replay (is_synced=false)
             if hasattr(self, 'ack_manager') and self.ack_manager:
-                sync_start_seq = await self.ack_manager.get_next_broker_seq(session_id)
-                sync_status = await self.ack_manager.get_sync_status(session_id)
+                sync_start_seq = await self.ack_manager.get_next_broker_seq(session.tab_id)
+                sync_status = await self.ack_manager.get_sync_status(session.tab_id)
                 await conn_info.websocket.send(json.dumps({
                     'type': 'sync_status',
                     'tabId': session.tab_id,
@@ -473,8 +474,8 @@ class SessionManager:
 
             # Send sync_status at end of replay (is_synced=true)
             if hasattr(self, 'ack_manager') and self.ack_manager:
-                sync_end_seq = await self.ack_manager.get_next_broker_seq(session_id)
-                sync_status = await self.ack_manager.get_sync_status(session_id)
+                sync_end_seq = await self.ack_manager.get_next_broker_seq(session.tab_id)
+                sync_status = await self.ack_manager.get_sync_status(session.tab_id)
                 await conn_info.websocket.send(json.dumps({
                     'type': 'sync_status',
                     'tabId': session.tab_id,

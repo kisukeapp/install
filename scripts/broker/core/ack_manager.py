@@ -158,6 +158,14 @@ class AckManager:
 
             state.last_ios_activity = time.time()
 
+            # If broker has no baseline for iOS->broker seq, rebase on first inbound message
+            if state.broker_last_sent_ack == -1 and ios_seq is not None:
+                # Establish baseline so this message becomes next_expected
+                state.broker_last_sent_ack = ios_seq - 1
+                log.info(
+                    f"🔁 Rebased iOS→Broker seq for {session_id}: baseline set to {state.broker_last_sent_ack} (first ios_seq={ios_seq})"
+                )
+
             # Check if this is a duplicate (already processed)
             if ios_seq <= state.broker_last_sent_ack:
                 log.debug(f"Duplicate message seq {ios_seq} for session {session_id} (last_ack={state.broker_last_sent_ack})")

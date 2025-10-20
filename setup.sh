@@ -89,6 +89,8 @@ log() {
     fi
 }
 
+ 
+
 parse_args() {
     local parsing_install=0 parsing_uninstall=0
     for arg in "$@"; do
@@ -416,7 +418,10 @@ EOF
         python3)
             local python_bin_dir="$BIN_DIR/python3/bin"
             if [[ -d "$python_bin_dir" ]]; then
-                for binary in python3 pip pip3; do
+                # Do NOT try to create a top-level symlink named "python3" because
+                # "$BIN_DIR/python3" is the install directory and would collide.
+                # Instead, only link pip/pip3 and the convenience "python" shim.
+                for binary in pip pip3; do
                     if [[ -x "$python_bin_dir/$binary" ]]; then
                         if ln -sf "$python_bin_dir/$binary" "$BIN_DIR/$binary"; then
                             log NOTIFY "Created symlink: $binary -> $python_bin_dir/$binary"
@@ -514,7 +519,13 @@ verify_installation() {
             ;;
         python3)
             local all_working=true
-            for binary in python python3 pip; do
+            # Ensure the managed interpreter exists at the expected location
+            if [[ ! -x "$BIN_DIR/python3/bin/python3" ]]; then
+                log ERROR "managed python3 binary not found at $BIN_DIR/python3/bin/python3"
+                all_working=false
+            fi
+            # Verify shims that installs create and expose in PATH
+            for binary in python pip; do
                 if ! command -v "$binary" >/dev/null; then
                     log ERROR "$binary not found in PATH"
                     all_working=false
@@ -796,26 +807,101 @@ download_and_extract() {
         return 1
     fi
     
-    log NOTIFY "Downloading $filename..."
-    
+    # Optional caching for larger archives: nodejs and python3
+    local cache_file="$CACHE_DIR/$filename"
+    if [[ "$pkg" == "nodejs" || "$pkg" == "python3" ]]; then
+        if [[ -f "$cache_file" ]]; then
+            log NOTIFY "Using cached $filename from $CACHE_DIR"
+            case "$filename" in
+                *.tar.xz) tar -xJf "$cache_file" -C "$HOME" ;;
+                *.tar.gz) tar -xzf "$cache_file" -C "$HOME" ;;
+                *) tar -xf "$cache_file" -C "$HOME" ;;
+            esac
+            if [[ $? -eq 0 ]]; then
+                echo "installed" > "$INSTALL_MARKER_DIR/$pkg.installed"
+                local pkg_version
+                if ! pkg_version=$(get_expected_version "$pkg"); then
+                    pkg_version="unknown"
+                fi
+                cache_set "${pkg}_local" "$pkg_version"
+                create_symlinks "$pkg"
+                log OK "$pkg installed successfully"
+                return 0
+            else
+                log ALERT "Cached archive extraction failed, removing cache and re-downloading"
+                rm -f "$cache_file" || true
+            fi
+        fi
+    fi
+
+    # Prefer streaming extraction to avoid large temp files (we package .tar.xz)
+    if [[ "$filename" == *.tar.xz ]]; then
+        if [[ "$pkg" == "nodejs" || "$pkg" == "python3" ]]; then
+            log NOTIFY "Streaming + caching $filename..."
+            if curl -sSL "$download_url" | tee "$cache_file" | tar -xJ -C "$HOME"; then
+                echo "installed" > "$INSTALL_MARKER_DIR/$pkg.installed"
+                local pkg_version
+                if ! pkg_version=$(get_expected_version "$pkg"); then
+                    pkg_version="unknown"
+                fi
+                cache_set "${pkg}_local" "$pkg_version"
+                create_symlinks "$pkg"
+                log OK "$pkg installed successfully"
+                
+                return 0
+            else
+                log ALERT "Streaming extract failed; removing partial cache and falling back for $filename"
+                rm -f "$cache_file" || true
+            fi
+        else
+            log NOTIFY "Streaming extract $filename..."
+            if curl -sSL "$download_url" | tar -xJ -C "$HOME"; then
+                echo "installed" > "$INSTALL_MARKER_DIR/$pkg.installed"
+                local pkg_version
+                if ! pkg_version=$(get_expected_version "$pkg"); then
+                    pkg_version="unknown"
+                fi
+                cache_set "${pkg}_local" "$pkg_version"
+                create_symlinks "$pkg"
+                log OK "$pkg installed successfully"
+                
+                return 0
+            else
+                log ALERT "Streaming extract failed; falling back to temp file for $filename"
+            fi
+        fi
+    fi
+
+    # Fallback: download then extract
+    log NOTIFY "Downloading $filename (fallback)..."
     local temp_dir
     if ! temp_dir=$(mktemp -d /tmp/kisuke.XXXXXX); then
         log ERROR "Failed to create temporary directory"
         return 1
     fi
     trap "rm -rf '$temp_dir'; trap - RETURN" RETURN
-    
-    if curl -sSL "$download_url" -o "$temp_dir/$filename" &&
-       tar -xJf "$temp_dir/$filename" -C "$HOME"; then
-        echo "installed" > "$INSTALL_MARKER_DIR/$pkg.installed"
-        local pkg_version
-        if ! pkg_version=$(get_expected_version "$pkg"); then
-            pkg_version="unknown"
+    if curl -sSL "$download_url" -o "$temp_dir/$filename"; then
+        case "$filename" in
+            *.tar.xz) tar -xJf "$temp_dir/$filename" -C "$HOME" ;;
+            *.tar.gz) tar -xzf "$temp_dir/$filename" -C "$HOME" ;;
+            *) tar -xf "$temp_dir/$filename" -C "$HOME" ;;
+        esac
+        if [[ $? -eq 0 ]]; then
+            # Populate cache for nodejs/python3 on successful extraction
+            if [[ "$pkg" == "nodejs" || "$pkg" == "python3" ]]; then
+                cp -f "$temp_dir/$filename" "$cache_file" 2>/dev/null || true
+            fi
+            echo "installed" > "$INSTALL_MARKER_DIR/$pkg.installed"
+            local pkg_version
+            if ! pkg_version=$(get_expected_version "$pkg"); then
+                pkg_version="unknown"
+            fi
+            cache_set "${pkg}_local" "$pkg_version"
+            create_symlinks "$pkg"
+            log OK "$pkg installed successfully"
+            
+            return 0
         fi
-        cache_set "${pkg}_local" "$pkg_version"
-        create_symlinks "$pkg"
-        log OK "$pkg installed successfully"
-        return 0
     fi
     
     log ERROR "Failed to install $pkg"

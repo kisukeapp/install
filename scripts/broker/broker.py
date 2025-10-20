@@ -7,6 +7,7 @@ import logging
 import sys
 from pathlib import Path
 import websockets
+import os
 import html
 
 # Add proxy module to path if needed
@@ -28,7 +29,7 @@ log = logging.getLogger(__name__)
 class KisukeBroker:
     """Main broker coordinating iOS <-> Claude communication."""
     
-    def __init__(self, port: int = PORT):
+    def __init__(self, port: int = PORT, host: str | None = None):
         """
         Initialize Kisuke Broker.
         
@@ -36,6 +37,8 @@ class KisukeBroker:
             port: WebSocket port to listen on
         """
         self.port = port
+        # Host binding: allow override via ctor or KHOST env
+        self.host = host or os.getenv("KHOST") or HOST
         self.running = False
         self.global_credentials = None  # Global credentials from iOS (shared by all sessions)
         
@@ -109,17 +112,32 @@ class KisukeBroker:
         async def connection_handler(websocket, path=None):
             await self.message_handlers.handle_connection(websocket, path or "/")
 
-        self.ws_server = await websockets.serve(
-            connection_handler,
-            HOST,
-            self.port,
-            process_request=self._process_http_request,
-            ping_interval=None,  # Disable server-initiated pings - iOS manages heartbeat
-            ping_timeout=None,   # No timeout for pongs - permanent connections
-            close_timeout=10,    # Clean shutdown timeout only
-            max_size=10 * 1024 * 1024  # 10 MB max frame size (matches client)
-        )
-        log.info(f"WebSocket server listening on ws://{HOST}:{self.port}")
+        # Try binding to requested host; if it fails, fallback to loopback
+        try:
+            self.ws_server = await websockets.serve(
+                connection_handler,
+                self.host,
+                self.port,
+                process_request=self._process_http_request,
+                ping_interval=None,
+                ping_timeout=None,
+                close_timeout=10,
+                max_size=10 * 1024 * 1024,
+            )
+            log.info(f"WebSocket server listening on ws://{self.host}:{self.port}")
+        except OSError as e:
+            log.warning(f"Failed to bind to {self.host}:{self.port} ({e}); falling back to 127.0.0.1")
+            self.ws_server = await websockets.serve(
+                connection_handler,
+                "127.0.0.1",
+                self.port,
+                process_request=self._process_http_request,
+                ping_interval=None,
+                ping_timeout=None,
+                close_timeout=10,
+                max_size=10 * 1024 * 1024,
+            )
+            log.info(f"WebSocket server listening on ws://127.0.0.1:{self.port}")
 
         # Print to stdout for forwarder detection (event-driven startup)
         print(f"BROKER_READY:{self.port}", flush=True)
@@ -211,8 +229,20 @@ class KisukeBroker:
         # Normalize path to string
         p = str(path or "/")
 
-        # Let WebSocket handshake proceed for all non-/logs paths
-        if p == "/" or p.startswith("/ws") or (not p.startswith("/logs")):
+        # Simple auth check for WebSocket handshake (non-/logs requests)
+        if not p.startswith("/logs"):
+            token = os.getenv("KTOKEN")
+            if token:
+                # Accept either KTOKEN header or Authorization: Bearer <token>
+                provided = request_headers.get("KTOKEN") or request_headers.get("Authorization", "").removeprefix("Bearer ").strip()
+                if provided != token:
+                    body = b"Unauthorized\n"
+                    return _build_ws_response(
+                        401,
+                        [("Content-Type", "text/plain; charset=utf-8"), ("Cache-Control", "no-store")],
+                        body,
+                    )
+            # No token configured or token matched: proceed with upgrade
             return None
 
         # Only handle /logs here

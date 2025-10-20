@@ -4,30 +4,95 @@ Claude interface for the broker.
 This module provides a simple interface to the Claude SDK,
 managing Claude sessions and handling message passing.
 """
+from __future__ import annotations
+
 import os
 import logging
-from typing import Dict, Optional, Callable, Any, AsyncGenerator
+from typing import Dict, Optional, Callable, Any, AsyncGenerator, TYPE_CHECKING
 from dataclasses import dataclass
 
-from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
-from claude_agent_sdk.types import (
-    AssistantMessage,
-    ResultMessage,
-    StreamEvent,
-    SystemMessage,
-    TextBlock,
-    ThinkingBlock,
-    ToolResultBlock,
-    ToolUseBlock,
-    UserMessage,
-    PermissionResultAllow,
-    PermissionResultDeny,
-    ToolPermissionContext,
-)
+# Heavy SDK imports are deferred to runtime to speed up broker startup.
+# For type checking only (no runtime import cost):
+if TYPE_CHECKING:  # pragma: no cover - type checking only
+    from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
+    from claude_agent_sdk.types import (
+        AssistantMessage,
+        ResultMessage,
+        StreamEvent,
+        SystemMessage,
+        TextBlock,
+        ThinkingBlock,
+        ToolResultBlock,
+        ToolUseBlock,
+        UserMessage,
+        PermissionResultAllow,
+        PermissionResultDeny,
+        ToolPermissionContext,
+    )
+
+# Placeholders for lazily imported SDK symbols
+ClaudeAgentOptions = None  # type: ignore
+ClaudeSDKClient = None  # type: ignore
+AssistantMessage = None  # type: ignore
+ResultMessage = None  # type: ignore
+StreamEvent = None  # type: ignore
+SystemMessage = None  # type: ignore
+TextBlock = None  # type: ignore
+ThinkingBlock = None  # type: ignore
+ToolResultBlock = None  # type: ignore
+ToolUseBlock = None  # type: ignore
+UserMessage = None  # type: ignore
+PermissionResultAllow = None  # type: ignore
+PermissionResultDeny = None  # type: ignore
+ToolPermissionContext = None  # type: ignore
 
 from .permission_manager import PermissionMode, RuntimePermissionManager
 from .utils import dataclass_to_dict
 import uuid
+
+
+def _ensure_sdk_imported() -> None:
+    """Import the Claude SDK lazily and cache symbols at module scope."""
+    global ClaudeAgentOptions, ClaudeSDKClient
+    global AssistantMessage, ResultMessage, StreamEvent, SystemMessage
+    global TextBlock, ThinkingBlock, ToolResultBlock, ToolUseBlock, UserMessage
+    global PermissionResultAllow, PermissionResultDeny, ToolPermissionContext
+
+    if ClaudeSDKClient is not None and ClaudeAgentOptions is not None:
+        # Already imported
+        return
+
+    # Import on first use
+    from claude_agent_sdk import ClaudeAgentOptions as _ClaudeAgentOptions, ClaudeSDKClient as _ClaudeSDKClient
+    from claude_agent_sdk.types import (
+        AssistantMessage as _AssistantMessage,
+        ResultMessage as _ResultMessage,
+        StreamEvent as _StreamEvent,
+        SystemMessage as _SystemMessage,
+        TextBlock as _TextBlock,
+        ThinkingBlock as _ThinkingBlock,
+        ToolResultBlock as _ToolResultBlock,
+        ToolUseBlock as _ToolUseBlock,
+        UserMessage as _UserMessage,
+        PermissionResultAllow as _PermissionResultAllow,
+        PermissionResultDeny as _PermissionResultDeny,
+        ToolPermissionContext as _ToolPermissionContext,
+    )
+
+    ClaudeAgentOptions = _ClaudeAgentOptions
+    ClaudeSDKClient = _ClaudeSDKClient
+    AssistantMessage = _AssistantMessage
+    ResultMessage = _ResultMessage
+    StreamEvent = _StreamEvent
+    SystemMessage = _SystemMessage
+    TextBlock = _TextBlock
+    ThinkingBlock = _ThinkingBlock
+    ToolResultBlock = _ToolResultBlock
+    ToolUseBlock = _ToolUseBlock
+    UserMessage = _UserMessage
+    PermissionResultAllow = _PermissionResultAllow
+    PermissionResultDeny = _PermissionResultDeny
+    ToolPermissionContext = _ToolPermissionContext
 
 # Debug flag for control message logging
 ENABLE_CONTROL_DEBUG = True  # Temporarily forced on for debugging
@@ -37,6 +102,7 @@ log = logging.getLogger(__name__)
 
 def _serialize_content_block(block: Any) -> Dict[str, Any]:
     """Normalize Claude content blocks into JSON-serialisable structures."""
+    _ensure_sdk_imported()
     if isinstance(block, TextBlock):
         return {"type": "text", "text": block.text.strip()}
     if isinstance(block, ThinkingBlock):
@@ -69,6 +135,7 @@ def _serialize_content_block(block: Any) -> Dict[str, Any]:
 
 def _serialize_message(message: Any) -> Dict[str, Any]:
     """Convert SDK message types into JSON the client can stream."""
+    _ensure_sdk_imported()
     if isinstance(message, AssistantMessage):
         return {
             "type": "assistant",
@@ -244,6 +311,8 @@ def create_can_use_tool_callback(permission_manager: RuntimePermissionManager, t
         Returns:
             PermissionResultAllow or PermissionResultDeny
         """
+        _ensure_sdk_imported()
+
         # Generate request ID with tab context for iOS routing
         # Format: {tab_id}:{unique_id}
         request_id = f"{tab_id}:{uuid.uuid4().hex[:8]}"
@@ -376,6 +445,9 @@ class ClaudeInterface:
         Returns:
             Created ClaudeSession
         """
+        # Ensure SDK is available (lazy import)
+        _ensure_sdk_imported()
+
         # Set up environment to hijack Claude Code's API calls through our proxy
         # Use session-specific token for per-session credential isolation
         from .config import DEFAULT_ANTHROPIC_BASE_URL

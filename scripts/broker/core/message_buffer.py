@@ -67,7 +67,8 @@ class MessageBuffer:
     
     async def add_message(self, 
                           session_id: str,
-                          content: Dict) -> Message:
+                          content: Dict,
+                          seq: Optional[int] = None) -> Message:
         """
         Add a message to the buffer with sequence number.
         Credentials are passed globally with each message to proxy.
@@ -86,8 +87,11 @@ class MessageBuffer:
                 self._buffers[session_id] = deque(maxlen=self.max_buffer_size)
                 self._next_seq[session_id] = 0
             
-            # Create message with sequence number (no credential needed - they're global)
-            seq = self._next_seq[session_id]
+            # Determine sequence number for this message
+            # If a seq is provided (e.g., from AckManager using tabId namespace),
+            # use it so replays preserve the exact broker→iOS sequence.
+            # Otherwise, fall back to buffer-managed sequencing for legacy callers.
+            assigned_seq = seq if seq is not None else self._next_seq[session_id]
 
             # Extract turn_id if present in content for tracking
             turn_id = None
@@ -97,7 +101,7 @@ class MessageBuffer:
                 parent_turn_id = content.get('parent_turn_id')
 
             message = Message(
-                seq=seq,
+                seq=assigned_seq,
                 content=content,
                 turn_id=turn_id,
                 parent_turn_id=parent_turn_id
@@ -105,9 +109,10 @@ class MessageBuffer:
             
             # Add to buffer
             self._buffers[session_id].append(message)
-            self._next_seq[session_id] = seq + 1
+            # Keep next_seq monotonic even when an external seq is used
+            self._next_seq[session_id] = max(self._next_seq[session_id], assigned_seq + 1)
             
-            log.debug(f"Added message seq={seq} for session {session_id}")
+            log.debug(f"Added message seq={assigned_seq} for session {session_id}")
             return message
     
     async def acknowledge_message(self,

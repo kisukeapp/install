@@ -30,6 +30,7 @@ import subprocess
 import stat
 import threading
 from collections import defaultdict
+import signal
 
 # --- Streaming support using tmux pipe-pane ---
 # We attach to each pane in the session via `tmux pipe-pane` and stream
@@ -99,6 +100,22 @@ class TmuxMonitor:
         self.state_lock = threading.Lock()  # Protect shared state across threads
         self.pane_fifos = {}  # pane_id -> fifo path
         self.pane_threads = {}  # pane_id -> reader thread
+        # Session-missing guard: exit after N consecutive failed checks
+        self._missing_session_count = 0
+        try:
+            self._missing_session_threshold = int(os.environ.get("KISUKE_FORWARDER_MISSING_SESSION_THRESHOLD", "25"))
+        except Exception:
+            self._missing_session_threshold = 25  # ~5 seconds at 0.2s interval
+        # Throttle for tmux has-session checks (seconds)
+        try:
+            self._session_check_interval = float(os.environ.get("KISUKE_FORWARDER_SESSION_CHECK_INTERVAL", "1.0"))
+        except Exception:
+            self._session_check_interval = 1.0
+        self._last_session_check = 0.0
+        self._cached_session_exists = True
+
+        # Install signal handlers for graceful shutdown
+        self._install_signal_handlers()
         # Initialize and send startup event
         self.emit_event({
             'type': 'FORWARDER_STARTED',
@@ -145,6 +162,47 @@ class TmuxMonitor:
                 return []
         except Exception:
             return []
+
+    def _session_exists(self) -> bool:
+        """Return True if the tmux session exists."""
+        try:
+            # 'has-session' returns 0 when session exists
+            result = subprocess.run(
+                ['tmux', 'has-session', '-t', TMUX_SESSION],
+                capture_output=True,
+                text=True
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
+
+    def _session_exists_throttled(self) -> bool:
+        """Return cached session existence; refresh at configured interval."""
+        now = time.time()
+        if (now - self._last_session_check) >= self._session_check_interval:
+            exists = self._session_exists()
+            self._cached_session_exists = exists
+            self._last_session_check = now
+            return exists
+        return self._cached_session_exists
+
+    def _install_signal_handlers(self):
+        def _handler(signum, frame):
+            # Set running to False; the loop will clean up and exit
+            try:
+                self.emit_event({'type': 'DEBUG_SIGNAL', 'signal': signum})
+            except Exception:
+                pass
+            self.running = False
+
+        for sig in (signal.SIGINT, signal.SIGTERM, getattr(signal, 'SIGHUP', None)):
+            if sig is None:
+                continue
+            try:
+                signal.signal(sig, _handler)
+            except Exception:
+                # Some signals may not be available on all platforms/threads
+                pass
             
     def capture_pane_output(self, pane_id):
         """Capture recent output from a specific tmux pane.
@@ -367,6 +425,15 @@ class TmuxMonitor:
         """
         while self.running:
             try:
+                # Exit if tmux session is gone for sustained period (throttled checks)
+                if not self._session_exists_throttled():
+                    self._missing_session_count += 1
+                    if self._missing_session_count >= self._missing_session_threshold:
+                        self.emit_event({'type': 'DEBUG_TMUX_SESSION_LOST', 'tmux_session': TMUX_SESSION})
+                        break
+                else:
+                    self._missing_session_count = 0
+
                 panes = self.get_tmux_panes()
                 current_panes = set(panes)
 

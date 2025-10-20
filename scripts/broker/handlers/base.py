@@ -95,7 +95,8 @@ class BaseHandler:
             # Try to get session for proper seq tracking
             session = await self.session_manager.get_session_by_tab(tab_id)
             if session:
-                error_seq = await self.ack_manager.get_next_broker_seq(session.session_id)
+                # Use tabId-based sequencing for all iOS-facing messages
+                error_seq = await self.ack_manager.get_next_broker_seq(tab_id)
                 error_msg['seq'] = error_seq
 
         await self._send(ws, error_msg)

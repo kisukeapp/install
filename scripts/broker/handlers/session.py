@@ -90,7 +90,7 @@ class SessionHandler(BaseHandler):
                 self.broker, self.session_manager, self.connection_manager,
                 self.message_buffer, self.route_manager, self.claude_interface, self.ack_manager
             )
-            await cred_handler.request_credentials_from_ios(ws)
+            await cred_handler.request_credentials_from_ios(ws, tab_id)
             await self._send_error(ws, "Credentials required - requesting from iOS", tab_id)
             return
 
@@ -117,13 +117,9 @@ class SessionHandler(BaseHandler):
             # Existing session - handle reconnection with ACK state
             last_received_seq = data.get('last_received_seq', -1)
 
-            # Reset iOS→Broker sequence tracking since iOS is starting fresh
-            # iOS will send messages starting from seq=1
-            await self.ack_manager.reset_ios_tracking(session.session_id)
-
             # Get reconnection info
             reconnect_info = await self.ack_manager.get_ios_reconnect_info(
-                session.session_id,
+                session.tab_id,
                 last_received_seq
             )
 

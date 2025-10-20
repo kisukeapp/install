@@ -216,14 +216,19 @@ class PermissionHandler(BaseHandler):
             'toolInput': tool_input
         }
 
+        # Allocate broker seq in tabId namespace and buffer with that seq
+        broker_seq = None
+        if hasattr(self, 'ack_manager') and self.ack_manager:
+            broker_seq = await self.ack_manager.get_next_broker_seq(tab_id)
+
         # Buffer the message for replay (critical for disconnect/reconnect)
-        # This ensures permission requests are replayed if iOS reconnects
         buffered_msg = await self.message_buffer.add_message(
             session_id=session.session_id,
-            content=permission_msg
+            content=permission_msg,
+            seq=broker_seq
         )
 
-        # Add sequence number for ACK tracking
+        # Add sequence number for ACK tracking (use assigned broker seq)
         permission_msg['seq'] = buffered_msg.seq
 
         # Send to all active connections

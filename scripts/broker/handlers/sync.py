@@ -50,6 +50,14 @@ class SyncHandler(BaseHandler):
             )
             return
 
+        # Fast-forward broker's view of iOS ACK state to reduce unnecessary replays
+        try:
+            if isinstance(last_received_seq, int):
+                await self.ack_manager.ack_from_ios(session.tab_id, last_received_seq)
+        except Exception:
+            # Non-fatal: proceed with replay logic regardless
+            pass
+
         # Delegate to session manager's replay logic (sends start/end sync_status + messages)
         log.info(
             f"Processing SYNC for tab={session.tab_id} session={session.session_id} on connection={connection_id}"

@@ -100,14 +100,26 @@ class CredentialsHandler(BaseHandler):
         # Ensure proxy bridge token reflects the latest credentials
         self.route_manager.sync_bridge_route()
 
-    async def request_credentials_from_ios(self, ws: WebSocketServerProtocol):
+    async def request_credentials_from_ios(self, ws: WebSocketServerProtocol, tab_id: str | None = None):
         """
         Request credentials from iOS when broker doesn't have them.
         """
-        await self._send(ws, {
+        msg = {
             'type': MessageType.REQUEST_CREDENTIALS,
             'reason': 'Broker requires credentials to process messages'
-        })
+        }
+
+        # If a tab context is available, include tabId and a broker seq
+        if tab_id:
+            msg['tabId'] = tab_id
+            try:
+                seq = await self.ack_manager.get_next_broker_seq(tab_id)
+                msg['seq'] = seq
+            except Exception:
+                # Non-fatal: proceed without seq if allocation fails
+                pass
+
+        await self._send(ws, msg)
         log.info("Requesting credentials from iOS")
 
     def _update_all_session_credentials(self, credentials):
